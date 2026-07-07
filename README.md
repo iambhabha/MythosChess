@@ -117,6 +117,9 @@ cargo run --release --bin datagen -- data.txt --games 20000   # self-play data
 python train_nnue.py data.txt shark.nnue --epochs 50          # train on GPU
 ```
 
+> 📘 Full step-by-step guide: **[docs/TRAINING.md](docs/TRAINING.md)** — how to
+> generate data, train a net on the GPU, use it, and make it stronger.
+
 ## 📈 How strong is it?
 
 Every change is measured by self‑play (`selfplay` harness) before it is kept.
