@@ -163,6 +163,16 @@ position (either the hand‑crafted eval or a loaded NNUE net); move generation
 feeds it legal moves. The transposition table and pruning heuristics let it look
 many moves deep in a fraction of a second.
 
+## 📚 Documentation
+
+| Doc | What's inside |
+| --- | --- |
+| **[Architecture](docs/ARCHITECTURE.md)** | How the whole engine works, subsystem by subsystem |
+| **[Training](docs/TRAINING.md)** | Generate data, train the NNUE on a GPU, use it |
+| **[Improving](docs/IMPROVING.md)** | Concrete, measured ways to make Shark stronger |
+| **[Contributing](CONTRIBUTING.md)** | Build, test, the "measure everything" rule, PRs |
+| **[Releasing](docs/RELEASING.md)** | Version, build binaries, publish a GitHub release |
+
 ## 🗺️ Roadmap
 
 - [x] **Foundation** — bitboards, magic attacks, `perft`‑verified legal movegen
