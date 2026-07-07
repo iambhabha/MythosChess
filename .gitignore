@@ -1,0 +1,11 @@
+# Rust build output
+/target
+
+# Local engine binaries and version snapshots (not source)
+*.exe
+
+# Trained NNUE nets and self-play training data (large / regenerable)
+*.nnue
+nnue_data.txt
+data_*.txt
+datagen_progress.txt

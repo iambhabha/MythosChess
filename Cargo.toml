@@ -1,0 +1,22 @@
+[package]
+name = "shark"
+version = "0.1.0"
+edition = "2024"
+description = "Shark — a UCI chess engine written in Rust, learning from Stockfish"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "shark"
+path = "src/main.rs"
+
+[lib]
+name = "shark"
+path = "src/lib.rs"
+
+# Fast, optimized release builds — this is what makes a chess engine strong.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[dependencies]

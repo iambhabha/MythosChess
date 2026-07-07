@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shark 🦈 — play in your browser</title>
+<style>
+  /* ------------------------------------------------------------------ *
+   * Theme tokens. We respect prefers-color-scheme for the PAGE chrome, *
+   * but the board squares keep fixed, high-contrast colors so pieces   *
+   * are always readable regardless of the OS theme.                    *
+   * ------------------------------------------------------------------ */
+  :root {
+    --bg: #f3f4f6;
+    --panel: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --accent: #0ea5e9;
+    --accent-dark: #0284c7;
+    --border: #d1d5db;
+    --shadow: rgba(0,0,0,0.12);
+
+    /* Board sizing + colors (fixed, theme-independent) */
+    --board-size: 480px;
+    --sq-light: #eceed4;
+    --sq-dark: #7d9a64;
+    --sel: #f6f66e;          /* selected square */
+    --dest: rgba(20,20,20,0.28);   /* legal-destination dot */
+    --lastmove: rgba(246, 210, 90, 0.55); /* last move highlight */
+    --check: rgba(220, 40, 40, 0.55);     /* king-in-check highlight */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-dark: #0ea5e9;
+      --border: #334155;
+      --shadow: rgba(0,0,0,0.4);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 40px;
+  }
+
+  header h1 {
+    font-size: 1.7rem;
+    margin: 0 0 4px;
+    text-align: center;
+    letter-spacing: 0.2px;
+  }
+  header p.tag {
+    margin: 0 0 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .layout {
+    display: flex;
+    gap: 28px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  /* --------------------------- Controls panel --------------------------- */
+  .controls {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: 0 6px 18px var(--shadow);
+    width: 240px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .controls h2 {
+    margin: 0;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  select, button {
+    font: inherit;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    padding: 9px 10px;
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  select:focus, button:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent-dark);
+    color: #fff;
+    font-weight: 600;
+    transition: background 0.15s;
+  }
+  button.primary:hover { background: var(--accent-dark); }
+  input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+
+  .status {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.9rem;
+    min-height: 1.2em;
+  }
+  .status .result { font-weight: 700; }
+  .thinking {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--accent-dark);
+  }
+  .thinking.show { display: flex; }
+  .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error {
+    color: #b91c1c;
+    font-size: 0.85rem;
+    display: none;
+  }
+  .error.show { display: block; }
+
+  /* --------------------------- Board --------------------------- */
+  .board-wrap {
+    display: grid;
+    /* corner + 8 files, corner + 8 ranks — rank labels on left, file labels on bottom */
+    grid-template-columns: 22px min-content;
+    grid-template-rows: min-content 22px;
+    gap: 0;
+    user-select: none;
+  }
+  .board {
+    grid-column: 2;
+    grid-row: 1;
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    width: var(--board-size);
+    height: var(--board-size);
+    border: 3px solid var(--sq-dark);
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px var(--shadow);
+    position: relative;
+  }
+  .rank-labels {
+    grid-column: 1;
+    grid-row: 1;
+    display: grid;
+    grid-template-rows: repeat(8, 1fr);
+  }
+  .file-labels {
+    grid-column: 2;
+    grid-row: 2;
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+  }
+  .rank-labels div, .file-labels div {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  .square {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: calc(var(--board-size) / 11);
+    line-height: 1;
+    cursor: default;
+  }
+  .square.light { background: var(--sq-light); }
+  .square.dark  { background: var(--sq-dark); }
+  .square.selectable { cursor: pointer; }
+  .square.selected::after {
+    content: "";
+    position: absolute; inset: 0;
+    background: var(--sel);
+    opacity: 0.55;
+  }
+  .square.lastmove::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: var(--lastmove);
+  }
+  .square.check::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: radial-gradient(circle, var(--check) 30%, transparent 72%);
+  }
+  /* legal-destination markers sit ABOVE the highlight layers */
+  .square .piece { position: relative; z-index: 2; }
+  .square.dest::after {
+    content: "";
+    position: absolute;
+    width: 30%; height: 30%;
+    border-radius: 50%;
+    background: var(--dest);
+    z-index: 1;
+  }
+  /* if a destination holds an enemy piece, ring it instead of dotting it */
+  .square.dest.occupied::after {
+    width: 84%; height: 84%;
+    background: transparent;
+    border: 5px solid var(--dest);
+    box-sizing: border-box;
+  }
+  /* white glyphs get a dark outline so they read on light squares too */
+  .piece.white { color: #ffffff; text-shadow: 0 0 2px #000, 0 1px 1px rgba(0,0,0,0.6); }
+  .piece.black { color: #111111; text-shadow: 0 0 1px rgba(255,255,255,0.35); }
+
+  /* --------------------------- Promotion chooser --------------------------- */
+  .promo-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+  }
+  .promo-overlay.show { display: flex; }
+  .promo-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    box-shadow: 0 10px 30px var(--shadow);
+    text-align: center;
+  }
+  .promo-box h3 { margin: 0 0 12px; font-size: 1rem; }
+  .promo-choices { display: flex; gap: 10px; }
+  .promo-choices button {
+    font-size: 40px;
+    width: 64px; height: 64px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--sq-light);
+    color: #111;
+  }
+  .promo-choices button:hover { background: var(--sel); }
+
+  footer {
+    margin-top: 26px;
+    color: var(--muted);
+    font-size: 0.8rem;
+    text-align: center;
+    max-width: 520px;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Shark 🦈 — play in your browser</h1>
+    <p class="tag">A Rust chess engine. You vs. Shark.</p>
+  </header>
+
+  <div class="layout">
+    <!-- Controls -->
+    <div class="controls">
+      <h2>Game</h2>
+
+      <button id="newGame" class="primary">New game</button>
+      <button id="undo">↩ Undo move</button>
+      <button id="flip">⇅ Flip board</button>
+
+      <div class="field">
+        <label for="colorSel">Play as</label>
+        <select id="colorSel">
+          <option value="white" selected>White</option>
+          <option value="black">Black</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="strengthSel">Shark strength</label>
+        <select id="strengthSel">
+          <option value="200">Easy (0.2s)</option>
+          <option value="500" selected>Medium (0.5s)</option>
+          <option value="1500">Hard (1.5s)</option>
+          <option value="3000">Max (3.0s)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="sizeSlider">Board size (<span id="sizeVal">480</span>px)</label>
+        <input type="range" id="sizeSlider" min="320" max="760" step="20" value="480">
+      </div>
+
+      <div class="status" id="status">Press “New game” to start.</div>
+      <div class="thinking" id="thinking"><span class="spinner"></span> Shark is thinking…</div>
+      <div class="error" id="error"></div>
+    </div>
+
+    <!-- Board -->
+    <div class="board-wrap">
+      <div class="board" id="board"></div>
+      <div class="rank-labels" id="rankLabels"></div>
+      <div class="file-labels" id="fileLabels"></div>
+    </div>
+  </div>
+
+  <!-- Promotion chooser -->
+  <div class="promo-overlay" id="promoOverlay">
+    <div class="promo-box">
+      <h3>Promote to…</h3>
+      <div class="promo-choices" id="promoChoices"></div>
+    </div>
+  </div>
+
+  <footer>
+    Shark runs entirely on your machine — this page talks to a local Rust engine.
+    No accounts, no cloud, no tracking.
+  </footer>
+
+<script>
+"use strict";
+/* ===================================================================== *
+ *  Shark web client                                                     *
+ *                                                                       *
+ *  Board indexing (matches the backend EXACTLY):                        *
+ *    index = rank * 8 + file, file 0=a..7=h, rank 0=rank1..7=rank8.     *
+ *    index 0  = a1 (White's bottom-left corner)                         *
+ *    index 63 = h8 (top-right)                                          *
+ *  The `board` string is 64 chars, index 0 = a1 ... 63 = h8.            *
+ *                                                                       *
+ *  API contract:  POST /api/play                                        *
+ *    body (raw text, form-urlencoded, NOT JSON):                        *
+ *      moves=<csv uci or empty>&movetime=<int ms>&engine=<0|1>          *
+ * ===================================================================== */
+
+/* ------------------------------ Glyphs ------------------------------- */
+// FEN piece letter -> Unicode glyph. Uppercase = white, lowercase = black.
+const GLYPH = {
+  P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔", // white  U+2659..2654
+  p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚"  // black  U+265F..265A
+};
+
+/* ------------------------------ State -------------------------------- */
+const state = {
+  moves: [],            // full UCI move history from the start position
+  board: ".".repeat(64),// 64-char board string from the backend
+  legal: [],            // legal UCI moves for the side to move NOW
+  side: "white",        // whose turn it is NOW
+  status: "ongoing",    // ongoing | checkmate | stalemate | draw
+  winner: null,         // "white" | "black" | null
+  check: false,         // side to move in check?
+  humanColor: "white",  // which color the human is playing
+  selected: null,       // currently selected square index (0..63) or null
+  lastMove: null,       // {from, to} indices to highlight (last applied move)
+  pending: false,       // a request is in flight (block input)
+  gameStarted: false,   // has a game been started at least once?
+  flipped: false        // board orientation: false = White at the bottom
+};
+
+/* --------------------------- DOM handles ----------------------------- */
+const boardEl     = document.getElementById("board");
+const rankLabelsEl = document.getElementById("rankLabels");
+const fileLabelsEl = document.getElementById("fileLabels");
+const statusEl    = document.getElementById("status");
+const thinkingEl  = document.getElementById("thinking");
+const errorEl     = document.getElementById("error");
+const colorSel    = document.getElementById("colorSel");
+const strengthSel = document.getElementById("strengthSel");
+const newGameBtn  = document.getElementById("newGame");
+const undoBtn     = document.getElementById("undo");
+const flipBtn     = document.getElementById("flip");
+const sizeSlider  = document.getElementById("sizeSlider");
+const sizeVal     = document.getElementById("sizeVal");
+const promoOverlay = document.getElementById("promoOverlay");
+const promoChoices = document.getElementById("promoChoices");
+
+/* --------------------------- Coord helpers --------------------------- */
+// Convert a UCI square like "e4" to a board index (rank*8+file).
+function squareToIndex(sq) {
+  const file = sq.charCodeAt(0) - 97; // 'a' -> 0
+  const rank = sq.charCodeAt(1) - 49; // '1' -> 0
+  return rank * 8 + file;
+}
+// Convert a board index back to a UCI square like "e4".
+function indexToSquare(idx) {
+  const file = idx % 8;
+  const rank = Math.floor(idx / 8);
+  return String.fromCharCode(97 + file) + String.fromCharCode(49 + rank);
+}
+// First 2 chars of a UCI move = "from" square, next 2 = "to" square.
+function uciFromIndex(uci) { return squareToIndex(uci.slice(0, 2)); }
+function uciToIndex(uci)   { return squareToIndex(uci.slice(2, 4)); }
+
+/* --------------------------- Rendering ------------------------------- */
+// Build the 8x8 grid. When the human plays Black we flip the board so the
+// human's pieces sit at the bottom.
+function render() {
+  boardEl.innerHTML = "";
+  rankLabelsEl.innerHTML = "";
+  fileLabelsEl.innerHTML = "";
+
+  const flip = state.flipped;
+
+  // Ranks: White-at-bottom iterates rank 7 (top) down to 0 (bottom).
+  // Flipped (Black-at-bottom) iterates rank 0 (top) up to 7 (bottom).
+  const ranks = flip ? [0,1,2,3,4,5,6,7] : [7,6,5,4,3,2,1,0];
+  const files = flip ? [7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7];
+
+  // Find the king of the side to move, to flag it if in check.
+  let checkIdx = -1;
+  if (state.check) {
+    const kingChar = state.side === "white" ? "K" : "k";
+    checkIdx = state.board.indexOf(kingChar);
+  }
+
+  // Precompute legal destinations from the selected square (if any).
+  const destSquares = new Set();
+  if (state.selected !== null) {
+    const fromSq = indexToSquare(state.selected);
+    for (const m of state.legal) {
+      if (m.slice(0, 2) === fromSq) destSquares.add(uciToIndex(m));
+    }
+  }
+
+  for (const rank of ranks) {
+    for (const file of files) {
+      const idx = rank * 8 + file;
+      const sq = document.createElement("div");
+      sq.className = "square " + (((rank + file) % 2 === 0) ? "dark" : "light");
+      // (a1 is a dark square: rank0+file0 = 0 -> even -> dark. Correct.)
+      sq.dataset.idx = idx;
+
+      // Highlights: last move, check, selection, destinations.
+      if (state.lastMove && (idx === state.lastMove.from || idx === state.lastMove.to)) {
+        sq.classList.add("lastmove");
+      }
+      if (idx === checkIdx) sq.classList.add("check");
+      if (idx === state.selected) sq.classList.add("selected");
+
+      const piece = state.board[idx];
+      if (piece && piece !== ".") {
+        const span = document.createElement("span");
+        span.className = "piece " + (piece === piece.toUpperCase() ? "white" : "black");
+        span.textContent = GLYPH[piece] || "";
+        sq.appendChild(span);
+      }
+
+      if (destSquares.has(idx)) {
+        sq.classList.add("dest");
+        if (piece && piece !== ".") sq.classList.add("occupied");
+      }
+
+      // Mark squares the human can interact with (own pieces on their turn).
+      if (isHumanTurn() && !state.pending && isOwnPiece(piece)) {
+        sq.classList.add("selectable");
+      } else if (destSquares.has(idx)) {
+        sq.classList.add("selectable");
+      }
+
+      sq.addEventListener("click", onSquareClick);
+      boardEl.appendChild(sq);
+    }
+  }
+
+  // Rank labels (left side), top-to-bottom, matching the rank iteration.
+  for (const rank of ranks) {
+    const d = document.createElement("div");
+    d.textContent = rank + 1;
+    rankLabelsEl.appendChild(d);
+  }
+  // File labels (bottom), left-to-right, matching the file iteration.
+  for (const file of files) {
+    const d = document.createElement("div");
+    d.textContent = String.fromCharCode(97 + file);
+    fileLabelsEl.appendChild(d);
+  }
+}
+
+/* --------------------------- Turn helpers ---------------------------- */
+function isHumanTurn() {
+  return state.gameStarted &&
+         state.status === "ongoing" &&
+         state.side === state.humanColor;
+}
+// Is `piece` (a FEN char from the board) one of the human's pieces?
+function isOwnPiece(piece) {
+  if (!piece || piece === ".") return false;
+  const isWhite = piece === piece.toUpperCase();
+  return (state.humanColor === "white") === isWhite;
+}
+
+/* --------------------------- Status line ----------------------------- */
+function updateStatus() {
+  errorEl.classList.remove("show");
+  let msg = "";
+  if (!state.gameStarted) {
+    statusEl.textContent = "Press “New game” to start.";
+    return;
+  }
+  if (state.status === "ongoing") {
+    const toMove = state.side === state.humanColor ? "Your move" : "Shark is to move";
+    msg = toMove + (state.check ? " — check!" : "");
+    statusEl.innerHTML = msg;
+  } else {
+    // Terminal states.
+    let result;
+    if (state.status === "checkmate") {
+      // winner is set on checkmate
+      const humanWon = state.winner === state.humanColor;
+      result = humanWon ? "Checkmate — you win! 🎉" : "Checkmate — Shark wins. 🦈";
+    } else if (state.status === "stalemate") {
+      result = "Stalemate — it's a draw.";
+    } else { // draw
+      result = "Draw.";
+    }
+    statusEl.innerHTML = '<span class="result">' + result + "</span>";
+  }
+}
+
+function setThinking(on) {
+  thinkingEl.classList.toggle("show", on);
+}
+function showError(text) {
+  errorEl.textContent = text;
+  errorEl.classList.add("show");
+}
+
+/* --------------------------- Networking ------------------------------ */
+// POST /api/play with a form-urlencoded body built by hand (NOT JSON).
+// Body format EXACTLY: moves=<csv>&movetime=<int>&engine=<0|1>
+async function callPlay(engine) {
+  const movetime = Math.round(Number(strengthSel.value)); // rounded int ms
+  const body =
+    "moves=" + encodeURIComponent(state.moves.join(",")) +
+    "&movetime=" + movetime +
+    "&engine=" + (engine ? 1 : 0);
+
+  const res = await fetch("/api/play", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body
+  });
+
+  if (!res.ok) throw new Error("Server returned HTTP " + res.status);
+  const data = JSON.parse(await res.text());
+  if (!data.ok) throw new Error(data.error || "Engine rejected the request.");
+  return data;
+}
+
+// Apply a backend response to local state. The backend is the source of
+// truth for board/legal/side/status/check; we only keep `moves` locally to
+// send history. If the engine moved, append that move so we stay in sync.
+function applyResponse(data, humanMoveIndices) {
+  state.board  = data.board;
+  state.legal  = data.legal || [];
+  state.side   = data.side;
+  state.status = data.status;
+  state.winner = data.winner;
+  state.check  = data.check;
+
+  // Highlight the most relevant last move: prefer the engine's reply, else
+  // the human's move that we just sent.
+  if (data.engineMove) {
+    state.moves.push(data.engineMove); // keep local history in sync
+    state.lastMove = { from: uciFromIndex(data.engineMove), to: uciToIndex(data.engineMove) };
+  } else if (humanMoveIndices) {
+    state.lastMove = humanMoveIndices;
+  }
+}
+
+/* --------------------------- New game -------------------------------- */
+async function newGame() {
+  if (state.pending) return;
+
+  state.humanColor = colorSel.value;
+  // Default orientation: the human's pieces at the bottom. A manual flip
+  // afterwards stays until the next new game.
+  state.flipped = state.humanColor === "black";
+  state.moves = [];
+  state.selected = null;
+  state.lastMove = null;
+  state.status = "ongoing";
+  state.winner = null;
+  state.gameStarted = true;
+  errorEl.classList.remove("show");
+
+  // White human => engine=0 (human moves first).
+  // Black human => engine=1 (Shark, playing White, makes the first move).
+  const humanIsWhite = state.humanColor === "white";
+  const engine = humanIsWhite ? 0 : 1;
+
+  state.pending = true;
+  setThinking(engine === 1);
+  render();
+  try {
+    const data = await callPlay(engine);
+    applyResponse(data, null);
+  } catch (err) {
+    showError("Could not start game: " + err.message);
+    state.gameStarted = false;
+  } finally {
+    state.pending = false;
+    setThinking(false);
+    render();
+    updateStatus();
+  }
+}
+
+/* --------------------------- Undo / takeback ------------------------- */
+// Take back the human's last move (and Shark's reply), landing back on the
+// human's turn. The backend is stateless, so we just shorten the move history
+// and re-fetch the resulting position with engine=0 (no Shark reply).
+async function undo() {
+  if (state.pending || !state.gameStarted) return;
+
+  const humanIsWhite = state.humanColor === "white";
+  // When the human plays Black, Shark's opening move must stay on the board.
+  const minMoves = humanIsWhite ? 0 : 1;
+  if (state.moves.length <= minMoves) return; // nothing of ours to take back
+
+  // Remove the last move; if that leaves it as Shark's turn (i.e. we only
+  // stripped Shark's reply), remove the human's move underneath it too.
+  state.moves.pop();
+  const humanToMove = humanIsWhite
+    ? (state.moves.length % 2 === 0)
+    : (state.moves.length % 2 === 1);
+  if (!humanToMove && state.moves.length > minMoves) {
+    state.moves.pop();
+  }
+
+  // Reset transient state; a takeback also un-ends a finished game.
+  state.selected = null;
+  state.status = "ongoing";
+  state.winner = null;
+  const last = state.moves[state.moves.length - 1];
+  state.lastMove = last
+    ? { from: uciFromIndex(last), to: uciToIndex(last) }
+    : null;
+
+  state.pending = true;
+  errorEl.classList.remove("show");
+  render();
+  updateStatus();
+  try {
+    const data = await callPlay(0); // engine=0: just re-read the position
+    applyResponse(data, state.lastMove);
+  } catch (err) {
+    showError("Undo failed: " + err.message);
+  } finally {
+    state.pending = false;
+    render();
+    updateStatus();
+  }
+}
+
+/* --------------------------- Human moves ----------------------------- */
+function onSquareClick(ev) {
+  if (state.pending || !isHumanTurn()) return;
+
+  const idx = Number(ev.currentTarget.dataset.idx);
+  const piece = state.board[idx];
+
+  // If a piece is already selected, a click may complete a move.
+  if (state.selected !== null) {
+    const fromSq = indexToSquare(state.selected);
+    const toSq = indexToSquare(idx);
+    // All legal moves matching this from->to (may be several if promotion).
+    const matches = state.legal.filter(m => m.slice(0, 4) === fromSq + toSq);
+
+    if (matches.length === 1) {
+      commitMove(matches[0]);
+      return;
+    }
+    if (matches.length > 1) {
+      // Promotion: same from/to but multiple promotion pieces.
+      showPromotion(fromSq + toSq, matches);
+      return;
+    }
+    // Not a legal destination. If they clicked another own piece, reselect.
+    if (isOwnPiece(piece)) {
+      state.selected = idx;
+      render();
+    } else {
+      // Clicked an empty/enemy non-destination square: deselect.
+      state.selected = null;
+      render();
+    }
+    return;
+  }
+
+  // Nothing selected yet: select an own piece that has at least one legal move.
+  if (isOwnPiece(piece)) {
+    const fromSq = indexToSquare(idx);
+    const hasMove = state.legal.some(m => m.slice(0, 2) === fromSq);
+    if (hasMove) {
+      state.selected = idx;
+      render();
+    }
+  }
+}
+
+// Show the 4-button promotion chooser. `matches` are full UCI strings like
+// e7e8q / e7e8r / e7e8b / e7e8n; we pick the one matching the chosen piece.
+function showPromotion(fromTo, matches) {
+  promoChoices.innerHTML = "";
+  const order = [
+    { p: "q", glyph: state.humanColor === "white" ? "♕" : "♛", label: "Queen" },
+    { p: "r", glyph: state.humanColor === "white" ? "♖" : "♜", label: "Rook" },
+    { p: "b", glyph: state.humanColor === "white" ? "♗" : "♝", label: "Bishop" },
+    { p: "n", glyph: state.humanColor === "white" ? "♘" : "♞", label: "Knight" }
+  ];
+  for (const opt of order) {
+    const full = matches.find(m => m.endsWith(opt.p));
+    if (!full) continue;
+    const btn = document.createElement("button");
+    btn.textContent = opt.glyph;
+    btn.title = opt.label;
+    btn.addEventListener("click", () => {
+      hidePromotion();
+      commitMove(full);
+    });
+    promoChoices.appendChild(btn);
+  }
+  promoOverlay.classList.add("show");
+}
+function hidePromotion() { promoOverlay.classList.remove("show"); }
+
+// Commit the chosen human move: append to history, POST with engine=1, and
+// let Shark reply. Trust the backend response for the resulting position.
+async function commitMove(uci) {
+  const humanMoveIndices = { from: uciFromIndex(uci), to: uciToIndex(uci) };
+  state.selected = null;
+  state.moves.push(uci);
+  // Optimistically show the human's move highlighted while Shark thinks.
+  state.lastMove = humanMoveIndices;
+  state.pending = true;
+  setThinking(true);
+  render();
+  updateStatus();
+
+  try {
+    const data = await callPlay(1); // engine=1 => Shark replies if game ongoing
+    applyResponse(data, humanMoveIndices);
+  } catch (err) {
+    // Roll back the optimistic history push so state stays consistent, and
+    // re-enable input.
+    state.moves.pop();
+    showError("Move failed: " + err.message + " — please try again.");
+  } finally {
+    state.pending = false;
+    setThinking(false);
+    render();
+    updateStatus();
+  }
+}
+
+/* --------------------------- Wire up UI ------------------------------ */
+newGameBtn.addEventListener("click", newGame);
+undoBtn.addEventListener("click", undo);
+flipBtn.addEventListener("click", () => { state.flipped = !state.flipped; render(); });
+sizeSlider.addEventListener("input", () => {
+  const px = Math.round(Number(sizeSlider.value));
+  document.documentElement.style.setProperty("--board-size", px + "px");
+  sizeVal.textContent = px;
+});
+// Clicking the dim overlay (outside the box) cancels a promotion choice.
+promoOverlay.addEventListener("click", (e) => {
+  if (e.target === promoOverlay) {
+    hidePromotion();
+    // Keep the pawn selected so the user can pick a different destination.
+    render();
+  }
+});
+
+// Initial empty board so the page looks right before the first game.
+(function initEmptyBoard() {
+  // Standard start position board string (index 0 = a1) so the page isn't
+  // blank on load; a real game replaces this on "New game".
+  state.board =
+    "RNBQKBNR" +   // rank 1  (a1..h1)  indices 0..7
+    "PPPPPPPP" +   // rank 2
+    "........" +   // rank 3
+    "........" +   // rank 4
+    "........" +   // rank 5
+    "........" +   // rank 6
+    "pppppppp" +   // rank 7
+    "rnbqkbnr";    // rank 8  (a8..h8)  indices 56..63
+  render();
+  updateStatus();
+})();
+</script>
+</body>
+</html>
