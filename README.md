@@ -1,6 +1,8 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="Mythos logo — a rectangular banner with a winged violet chess knight with golden wings on an amethyst chessboard, next to the golden word MYTHOS" width="560">
+<img src="assets/logo.svg" alt="Mythos logo — an ivory chess knight tilted over a two-by-two amethyst chessboard with neural-network constellations, in a rounded square" width="230">
+
+<h1>Mythos</h1>
 
 **A free and strong UCI chess engine written from scratch in Rust.**
 

@@ -1,77 +1,80 @@
-<svg viewBox="0 0 800 320" width="800" height="320" role="img" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 512 512" width="512" height="512" role="img" xmlns="http://www.w3.org/2000/svg">
 <title>Mythos chess engine logo</title>
-<desc>A rectangular banner: a winged violet chess knight with golden wings on a dark amethyst chessboard, next to the golden word MYTHOS.</desc>
+<desc>An app-icon style logo: a large ivory chess knight tilted diagonally over a two-by-two amethyst chessboard in a rounded square, with faint neural-network constellations in the dark squares.</desc>
 <defs>
-<radialGradient id="bg" cx="40%" cy="42%" r="80%">
-<stop offset="0%" stop-color="#4a2680"/>
-<stop offset="55%" stop-color="#2e1758"/>
-<stop offset="100%" stop-color="#160b30"/>
+<linearGradient id="sqTL" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#c2ade9"/>
+<stop offset="100%" stop-color="#9c81d0"/>
+</linearGradient>
+<linearGradient id="sqTR" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#3a2465"/>
+<stop offset="100%" stop-color="#241243"/>
+</linearGradient>
+<linearGradient id="sqBL" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#402a6e"/>
+<stop offset="100%" stop-color="#2a164d"/>
+</linearGradient>
+<linearGradient id="sqBR" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#8a6fc2"/>
+<stop offset="100%" stop-color="#5f4596"/>
+</linearGradient>
+<linearGradient id="kn" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="#f9f2e0"/>
+<stop offset="55%" stop-color="#e8d5ab"/>
+<stop offset="100%" stop-color="#c9ad78"/>
+</linearGradient>
+<radialGradient id="vig" cx="45%" cy="40%" r="75%">
+<stop offset="55%" stop-color="#170b33" stop-opacity="0"/>
+<stop offset="100%" stop-color="#170b33" stop-opacity="0.55"/>
 </radialGradient>
-<linearGradient id="knight" x1="0" y1="0" x2="0" y2="1">
-<stop offset="0%" stop-color="#d7aaff"/>
-<stop offset="45%" stop-color="#b06bff"/>
-<stop offset="100%" stop-color="#7a3fd4"/>
-</linearGradient>
-<linearGradient id="wing" x1="0" y1="0" x2="0" y2="1">
-<stop offset="0%" stop-color="#fbe9a9"/>
-<stop offset="55%" stop-color="#d8a63c"/>
-<stop offset="100%" stop-color="#a3781f"/>
-</linearGradient>
-<linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
-<stop offset="0%" stop-color="#f8dc7d"/>
-<stop offset="50%" stop-color="#c9962f"/>
-<stop offset="100%" stop-color="#8a6414"/>
-</linearGradient>
-<radialGradient id="vig" cx="50%" cy="48%" r="72%">
-<stop offset="55%" stop-color="#160b30" stop-opacity="0"/>
-<stop offset="100%" stop-color="#0d0620" stop-opacity="0.85"/>
-</radialGradient>
-<pattern id="board" width="160" height="160" patternUnits="userSpaceOnUse">
-<rect x="0" y="0" width="80" height="80" fill="#cbb6f2" fill-opacity="0.09"/>
-<rect x="80" y="80" width="80" height="80" fill="#cbb6f2" fill-opacity="0.09"/>
-</pattern>
-<clipPath id="frame"><rect x="6" y="6" width="788" height="308" rx="18"/></clipPath>
+<clipPath id="sq"><rect x="16" y="16" width="480" height="480" rx="110"/></clipPath>
 </defs>
 
-<g clip-path="url(#frame)">
-<rect x="6" y="6" width="788" height="308" fill="url(#bg)"/>
-<rect x="6" y="6" width="788" height="308" fill="url(#board)"/>
-<path d="M 52,58 A 20,20 0 1 0 52,98 A 16,16 0 0 1 52,58 Z" fill="#f6d876" opacity="0.65"/>
+<g clip-path="url(#sq)">
+<rect x="16" y="16" width="240" height="240" fill="url(#sqTL)"/>
+<rect x="256" y="16" width="240" height="240" fill="url(#sqTR)"/>
+<rect x="16" y="256" width="240" height="240" fill="url(#sqBL)"/>
+<rect x="256" y="256" width="240" height="240" fill="url(#sqBR)"/>
+
+<g stroke="#e9dcff" stroke-width="1" stroke-opacity="0.35" fill="#e9dcff" fill-opacity="0.5">
+<line x1="300" y1="60" x2="340" y2="100"/><line x1="340" y1="100" x2="390" y2="70"/>
+<line x1="390" y1="70" x2="430" y2="120"/><line x1="430" y1="120" x2="460" y2="60"/>
+<line x1="390" y1="70" x2="460" y2="60"/><line x1="340" y1="100" x2="310" y2="150"/>
+<line x1="310" y1="150" x2="360" y2="180"/>
+<circle cx="300" cy="60" r="2.2"/><circle cx="340" cy="100" r="1.7"/><circle cx="390" cy="70" r="2.5"/>
+<circle cx="430" cy="120" r="1.8"/><circle cx="460" cy="60" r="2"/><circle cx="310" cy="150" r="1.6"/>
+<circle cx="360" cy="180" r="2.1"/>
+</g>
+<g stroke="#e9dcff" stroke-width="1" stroke-opacity="0.35" fill="#e9dcff" fill-opacity="0.5">
+<line x1="60" y1="300" x2="105" y2="335"/><line x1="105" y1="335" x2="70" y2="390"/>
+<line x1="70" y1="390" x2="125" y2="425"/><line x1="125" y1="425" x2="58" y2="458"/>
+<line x1="105" y1="335" x2="150" y2="310"/><line x1="150" y1="310" x2="185" y2="365"/>
+<line x1="70" y1="390" x2="58" y2="458"/>
+<circle cx="60" cy="300" r="2.2"/><circle cx="105" cy="335" r="1.7"/><circle cx="70" cy="390" r="2.4"/>
+<circle cx="125" cy="425" r="1.8"/><circle cx="58" cy="458" r="2"/><circle cx="150" cy="310" r="1.6"/>
+<circle cx="185" cy="365" r="2.1"/>
+</g>
+
 <g fill="#f6d876">
-<path d="M700,68 L702,75 L709,77 L702,79 L700,86 L698,79 L691,77 L698,75 Z" opacity="0.8"/>
-<path d="M390,262 L391.4,267 L396,268 L391.4,269 L390,274 L388.6,269 L384,268 L388.6,267 Z" opacity="0.6"/>
-<circle cx="420" cy="70" r="2.2" opacity="0.6"/>
-<circle cx="742" cy="238" r="2" opacity="0.5"/>
-<circle cx="240" cy="56" r="1.8" opacity="0.6"/>
-</g>
-<rect x="6" y="6" width="788" height="308" fill="url(#vig)"/>
-<ellipse cx="230" cy="284" rx="120" ry="16" fill="#b06bff" opacity="0.15"/>
+<path d="M100,96 L102,103 L109,105 L102,107 L100,114 L98,107 L91,105 L98,103 Z" opacity="0.55"/>
+<path d="M430,426 L431.6,432 L437,433.5 L431.6,435 L430,441 L428.4,435 L423,433.5 L428.4,432 Z" opacity="0.5"/>
 </g>
 
-<g fill="url(#wing)" stroke="#2a1150" stroke-width="1" stroke-linejoin="round">
-<path d="M 295,185 C 298,145 320,110 345,90 C 337,120 322,155 310,188 Z" opacity="1"/>
-<path d="M 298,193 C 308,162 332,138 360,124 C 349,151 330,175 315,196 Z" opacity="0.95"/>
-<path d="M 301,200 C 316,180 340,164 368,156 C 353,176 332,190 318,204 Z" opacity="0.9"/>
-<path d="M 303,207 C 320,196 343,186 372,185 C 356,198 335,207 320,212 Z" opacity="0.85"/>
-</g>
+<rect x="16" y="16" width="480" height="480" fill="url(#vig)"/>
 
-<rect x="164" y="260" width="146" height="10" rx="5" fill="url(#ring)" stroke="#2a1150" stroke-width="1"/>
-
-<g transform="translate(88,40) scale(5.6)">
-<g transform="translate(0,0.3)" fill="url(#knight)" stroke="#2a1150" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round">
+<g transform="rotate(-8 256 266)">
+<g transform="translate(28,52) scale(10)">
+<g transform="translate(0,0.3)" fill="url(#kn)" stroke="#241238" stroke-width="0.7" stroke-linecap="round" stroke-linejoin="round">
 <path d="M 22,10 C 32.5,11 38.5,18 38,39 L 15,39 C 15,30 25,32.5 23,18"/>
 <path d="M 24,18 C 24.38,20.91 18.45,25.37 16,27 C 13,29 13.18,31.34 11,31 C 9.958,30.06 12.41,27.96 11,28 C 10,28 11.19,29.23 10,30 C 9,30 5.997,31 6,26 C 6,24 12,14 12,14 C 12,14 13.89,12.1 14,10.5 C 13.27,9.506 13.5,8.5 13.5,7.5 C 14.5,6.5 16.5,10 16.5,10 L 18.5,10 C 18.5,10 19.28,8.008 21,7 C 22,7 22,10 22,10"/>
-<path d="M 15 15.5 A 0.5 1.5 0 1 1 14,15.5 A 0.5 1.5 0 1 1 15 15.5 z" transform="matrix(0.866,0.5,-0.5,0.866,9.693,-5.173)" fill="#1b0b33" stroke="#1b0b33"/>
+<path d="M 15 15.5 A 0.5 1.5 0 1 1 14,15.5 A 0.5 1.5 0 1 1 15 15.5 z" transform="matrix(0.866,0.5,-0.5,0.866,9.693,-5.173)" fill="#241238" stroke="#241238"/>
+</g>
+<circle cx="9.3" cy="25.8" r="1.8" fill="#f6d876" opacity="0.3"/>
+<circle cx="9.3" cy="25.8" r="0.9" fill="#f6d876"/>
 </g>
 </g>
+</g>
 
-<circle cx="138.4" cy="182.8" r="7" fill="#f6d876" opacity="0.3"/>
-<circle cx="138.4" cy="182.8" r="3.5" fill="#f6d876"/>
-
-<text x="580" y="190" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-weight="bold" font-size="80" letter-spacing="6" fill="url(#wing)" stroke="#2a1150" stroke-width="1.5">MYTHOS</text>
-<text x="580" y="235" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="19" letter-spacing="10" fill="#f6d876" opacity="0.85">CHESS ENGINE</text>
-
-<rect x="6" y="6" width="788" height="308" rx="18" fill="none" stroke="#0d0620" stroke-width="6"/>
-<rect x="9" y="9" width="782" height="302" rx="16" fill="none" stroke="url(#ring)" stroke-width="5"/>
-<rect x="20" y="20" width="760" height="280" rx="12" fill="none" stroke="#f6d876" stroke-width="1.2" opacity="0.4"/>
+<rect x="16" y="16" width="480" height="480" rx="110" fill="none" stroke="#170b2e" stroke-width="5"/>
+<rect x="24" y="24" width="464" height="464" rx="102" fill="none" stroke="#f6d876" stroke-width="1.2" opacity="0.35"/>
 </svg>
