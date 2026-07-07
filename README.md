@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="Mythos logo — an ivory chess knight tilted over a two-by-two amethyst chessboard with neural-network constellations, in a rounded square" width="230">
+<img src="assets/logo.svg" alt="Mythos logo — a cosmic star-filled chess knight with golden wings and a laurel wreath over an amethyst chessboard, in a rounded square" width="230">
 
 <h1>Mythos</h1>
 
