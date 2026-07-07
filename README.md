@@ -1,4 +1,8 @@
-# Shark 🦈
+<p align="center">
+  <img src="assets/logo.png" alt="Shark logo — a shark over a chessboard with neural-network nodes" width="170">
+</p>
+
+<h1 align="center">Shark 🦈</h1>
 
 A UCI chess engine written in **Rust**, built by studying the
 [Stockfish](https://github.com/official-stockfish/Stockfish) C++ engine and
