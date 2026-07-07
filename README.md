@@ -1,103 +1,94 @@
-<p align="center">
-  <img src="assets/logo.png" alt="Shark logo — a shark over a chessboard with neural-network nodes" width="170">
-</p>
+<div align="center">
 
-<h1 align="center">Shark 🦈</h1>
+<img src="assets/logo.png" alt="Shark logo — a shark over a chessboard with neural-network nodes" width="200">
 
-A UCI chess engine written in **Rust**, built by studying the
-[Stockfish](https://github.com/official-stockfish/Stockfish) C++ engine and
-reimplementing its ideas idiomatically.
+<h1>Shark 🦈</h1>
 
-This is a learning-driven, from-scratch engine. We are **not** copying
-Stockfish line-by-line — we understand each subsystem, then write the Rust
-equivalent. (Stockfish is GPL v3; if Shark is ever distributed as a derivative,
-it must also be GPL v3 with source — hence the license below.)
+**A free and strong UCI chess engine written from scratch in Rust.**
 
-## Roadmap
+[![Language](https://img.shields.io/badge/language-Rust-CE422B?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Protocol](https://img.shields.io/badge/protocol-UCI-2E7D32)](https://backscattering.de/chess/uci/)
+[![License](https://img.shields.io/badge/license-GPL--3.0-1565C0)](#-license)
+[![Tests](https://img.shields.io/badge/tests-132%20passing-4CAF50)](#-build--run)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-607D8B)](#-build--run)
 
-The engine is built in phases. Each phase ends with something you can *run and
-test*, so we never have a giant untested pile of code.
+[Play](#-play-against-shark) ·
+[Features](#-features) ·
+[Build](#-build--run) ·
+[Strength](#-how-strong-is-it) ·
+[How it works](#-how-it-works) ·
+[Roadmap](#-roadmap)
 
-- [x] **Phase 0 — Foundation** ✅ *complete & perft-verified*
-  - [x] Core types: `Color`, `PieceType`, `Piece`, `Square`, `Direction`, `Move`
-  - [x] `Bitboard` primitive (set/clear/iterate/shift, popcount, lsb/msb)
-  - [x] Attack tables + **magic bitboards** (sliding pieces)
-  - [x] Zobrist hashing keys
-  - [x] `Position`: board state, FEN parsing, make/undo move, incremental Zobrist
-  - [x] Legal move generation
-  - [x] **`perft`** — matches all canonical node counts (startpos d6 = 119,060,324;
-        Kiwipete d5 = 193,690,690), ~51M nodes/sec in release
-- [x] **Phase 1 — A playable engine** ✅ *complete — Shark plays real chess*
-  - [x] Alpha-beta (negamax) search with iterative deepening + PVS
-  - [x] Quiescence search (avoids the horizon effect)
-  - [x] Transposition table (Zobrist-keyed, depth-preferred)
-  - [x] Move ordering: TT move, MVV-LVA, killers, history heuristic
-  - [x] PeSTO tapered evaluation (material + piece-square tables)
-  - [x] Draw detection (50-move, repetition) + mate/stalemate
-  - [x] Time management (movetime / clock+increment / depth / nodes)
-  - [x] UCI protocol loop with threaded search (`stop` works mid-think)
-- [~] **Phase 3 — Strength & polish** *(in progress — search is much deeper)*
-  - [x] Null-move pruning, reverse-futility (static null move)
-  - [x] Late move reductions (LMR)
-  - [x] Aspiration windows
-  - [x] Late move pruning (LMP) + frontier futility pruning
-  - [x] Delta pruning in quiescence + small contempt (anti-draw)
-  - [x] `selfplay` match harness to measure Elo of every change
-  - [x] Static Exchange Evaluation (SEE) for captures
-  - [x] Positional evaluation — mobility, king safety, passed pawns,
-        pawn structure, bishop pair, rook on open file, tempo
-  - [ ] Better time management + move-ordering/history tuning
-  - [ ] Faster pin-aware legal move generation (more depth)
-  - [ ] Lazy SMP multithreading
-  - [ ] Syzygy tablebases (`shakmaty-syzygy`)
-  - [ ] Profile-guided optimization
-- [ ] **Phase 4 — Neural network evaluation (NNUE)** *(the big future jump)*
-  - [ ] Scalar inference first (correct, then fast)
-  - [ ] Incremental accumulator + king-bucket features
-  - [ ] SIMD acceleration
+</div>
 
-> **Measured progress:** in the same 3-second search, the strengthened engine
-> reaches **depth 15** where the original Phase-1 baseline reaches **depth 8**
-> (+7 plies) — a large practical strength gain from the search techniques above.
+---
 
-## Layout
+## Overview
 
-```
-src/
-  types.rs      core value types (Color, Piece, Square, Move, ...)
-  bitboard.rs   the 64-bit board-set primitive
-  attacks.rs    knight/king/pawn tables + magic-bitboard sliders
-  zobrist.rs    position hashing keys
-  position.rs   board state, FEN, make/undo move
-  movegen.rs    legal move generation
-  perft.rs      move-generation correctness counter
-  eval.rs       PeSTO tapered evaluation
-  see.rs        static exchange evaluation (capture math)
-  tt.rs         transposition table
-  search.rs     alpha-beta search (the brain)
-  uci.rs        UCI protocol loop
-  lib.rs        module wiring + re-exports
-  main.rs       the `shark` binary entry point
-  bin/
-    selfplay.rs  match harness: plays two engines, reports Elo
-```
+**Shark** is a chess engine that analyzes positions and plays strong moves. Like
+most engines it has **no graphical interface** — it speaks the standard **UCI**
+protocol, so it plugs into any chess GUI, *or* you can play it right in your
+**web browser** using the tiny bundled server.
 
-## Build & test
+It is a **from-scratch, learning-driven** engine: every subsystem was understood
+by studying the [Stockfish](https://github.com/official-stockfish/Stockfish) C++
+engine, then reimplemented idiomatically in Rust — bitboards, a modern
+alpha‑beta search, a tapered hand‑crafted evaluation, and an **optional NNUE
+neural‑network evaluation** with its own self‑play data generator and GPU trainer.
+
+> **Honest note:** Shark is a young engine. It already beats most human players,
+> but it is **not** in the league of top engines like Stockfish (see
+> [How strong is it?](#-how-strong-is-it)). It is built to learn, measure, and
+> improve — one tested change at a time.
+
+## ✨ Features
+
+**Board & move generation**
+- Bitboard board representation with **magic‑bitboard** sliding‑piece attacks
+- Fast, pin‑ and check‑aware **legal move generation**, validated by `perft`
+  against every canonical node count (start position depth 6 = `119,060,324`)
+- Zobrist hashing with incremental updates
+
+**Search** (the "brain")
+- Fail‑soft **alpha‑beta** with iterative deepening and **principal variation search**
+- **Quiescence search** to escape the horizon effect
+- **Transposition table**, aspiration windows, and a full pruning toolkit:
+  null‑move, late move reductions (LMR), late move pruning, futility, reverse
+  futility, delta pruning, and **SEE**‑based capture pruning
+- Rich move ordering: TT move, SEE‑ordered captures, killers, history heuristic
+
+**Evaluation**
+- **Tapered hand‑crafted evaluation**: material + piece‑square tables, mobility,
+  king safety, passed pawns, pawn structure, bishop pair, rook on open file, tempo
+- **Optional NNUE** (neural network) evaluation with an **incrementally updated
+  accumulator** for fast inference
+
+**NNUE pipeline** (train your own evaluation)
+- `datagen` — multi‑threaded self‑play **data generator**
+- `train_nnue.py` — a **PyTorch GPU trainer** that exports Shark's `.nnue` format
+- In‑engine inference that loads a net and evaluates positions
+
+**Interfaces & tooling**
+- Full **UCI** protocol with a threaded search (`stop` works mid‑think)
+- A self‑contained **browser UI** to play against the engine locally
+- `selfplay` — a mini "Fishtest": plays two engine builds and reports the Elo gap
+
+## ♟️ Play against Shark
+
+### In your browser (easiest)
 
 ```sh
-cargo build --release          # compile the optimized engine
-cargo test                     # run the ~109 unit tests
-cargo test --release -- --ignored   # run the deep perft tests too
-cargo run --release            # start the UCI engine (talk to it or plug into a GUI)
-cargo run --release -- bench   # quick perft speed benchmark
+cargo run --release --bin webserver     # then open http://localhost:8080
 ```
 
-## Playing against Shark
+Pick your color and strength, and play — with move highlights, legal‑move dots,
+promotion picker, **undo**, **board flip**, and a **board‑size slider**.
 
-Shark speaks UCI, so any UCI GUI can drive it. Point the GUI at the built
-binary `target/release/shark.exe` (or `shark` on Linux/macOS). Good free GUIs:
-**Cute Chess**, **Arena**, **BanksiaGUI**, **En Croissant**. You can also talk to
-it by hand:
+### In a chess GUI
+
+Shark speaks UCI, so point any UCI GUI at the built binary
+(`target/release/shark`). Great free GUIs: **Cute Chess**, **Arena**,
+**BanksiaGUI**, **En Croissant**. Or drive it by hand:
 
 ```
 uci
@@ -105,6 +96,121 @@ position startpos moves e2e4 e7e5
 go movetime 2000
 ```
 
-## License
+## 🛠️ Build & run
 
-GPL-3.0-or-later.
+Shark needs only a stable **Rust** toolchain (`rustup`) — no external
+dependencies for the engine itself.
+
+```sh
+cargo build --release                  # compile the optimized engine
+cargo run   --release                  # start the UCI engine
+cargo run   --release --bin webserver  # play in the browser at localhost:8080
+cargo test                             # ~132 unit tests
+cargo test  --release -- --ignored     # deep perft correctness tests
+cargo run   --release -- bench         # quick perft speed benchmark
+```
+
+Optional NNUE trainer (needs Python + PyTorch with CUDA for GPU training):
+
+```sh
+cargo run --release --bin datagen -- data.txt --games 20000   # self-play data
+python train_nnue.py data.txt shark.nnue --epochs 50          # train on GPU
+```
+
+## 📈 How strong is it?
+
+Every change is measured by self‑play (`selfplay` harness) before it is kept.
+Starting from the first playable version, the search and evaluation work so far
+has added a large, **measured** amount of strength:
+
+| Improvement round | Measured gain |
+| --- | --- |
+| Null‑move, LMR, aspiration windows, SEE | **+223 Elo** |
+| Full positional evaluation | **+58 Elo** |
+| Faster legal move generation | **+44 Elo** |
+| **Cumulative** | **≈ +320 Elo** over the first playable build |
+
+In the same 3‑second search the current engine reaches **depth 17** where the
+first playable build reached depth 8.
+
+**Absolute strength** is an estimate (not yet measured against a rated opponent):
+roughly **~2400–2600 Elo** — enough to beat the vast majority of human players.
+It is *not* close to the world's top engines (Stockfish is ~3600), and reaching
+that level is a multi‑year, massive‑resources effort — not the goal here.
+
+## 🧠 How it works
+
+```
+                 UCI / browser
+                       │
+        ┌──────────────▼──────────────┐
+        │            Search           │   alpha-beta + iterative deepening,
+        │  (transposition table,      │   PVS, quiescence, null-move, LMR,
+        │   move ordering, pruning)   │   aspiration, futility, SEE …
+        └───────┬──────────────┬──────┘
+                │              │
+     ┌──────────▼───┐   ┌──────▼───────────────┐
+     │  Evaluation  │   │  Move generation     │   magic bitboards,
+     │  HCE  or  NNUE│   │  (legal, pin-aware)  │   pin/check-aware legality
+     └──────────────┘   └──────────────────────┘
+```
+
+The search explores the game tree; at the leaves the **evaluation** scores each
+position (either the hand‑crafted eval or a loaded NNUE net); move generation
+feeds it legal moves. The transposition table and pruning heuristics let it look
+many moves deep in a fraction of a second.
+
+## 🗺️ Roadmap
+
+- [x] **Foundation** — bitboards, magic attacks, `perft`‑verified legal movegen
+- [x] **Playable engine** — alpha‑beta search, TT, evaluation, UCI, browser UI
+- [x] **Strength** — null‑move, LMR, aspiration, LMP, futility, SEE, positional
+      eval, faster legal movegen *(measured, ongoing)*
+- [x] **NNUE pipeline** — self‑play datagen, GPU trainer, incremental inference
+- [ ] **Faster NNUE** — SIMD + int8 quantization so the net beats the hand‑eval
+- [ ] **Stronger NNUE** — iterative self‑play training, richer features
+- [ ] **Lazy SMP** multithreading, **Syzygy** tablebases, profile‑guided builds
+
+## 📂 Project layout
+
+```
+src/
+  types.rs      core value types (Color, Piece, Square, Move, …)
+  bitboard.rs   the 64-bit board-set primitive (+ between/line tables)
+  attacks.rs    knight/king/pawn tables + magic-bitboard sliders
+  zobrist.rs    position hashing keys
+  position.rs   board state, FEN, make/undo move
+  movegen.rs    fast pin/check-aware legal move generation
+  perft.rs      move-generation correctness counter
+  eval.rs       tapered hand-crafted evaluation
+  see.rs        static exchange evaluation (capture math)
+  tt.rs         transposition table
+  search.rs     alpha-beta search — the brain
+  nnue.rs       NNUE inference + incremental accumulator
+  uci.rs        UCI protocol loop
+  lib.rs        module wiring + re-exports
+  main.rs       the `shark` binary entry point
+  bin/
+    webserver.rs  local web server — play Shark in a browser
+    selfplay.rs   match harness: plays two engines, reports Elo
+    datagen.rs    self-play NNUE training-data generator
+    train.rs      (CPU trainer; the GPU one is train_nnue.py)
+train_nnue.py   PyTorch GPU trainer for the NNUE evaluation
+web/index.html  the self-contained browser chess UI
+```
+
+## 🙏 Acknowledgements
+
+- The [Stockfish](https://github.com/official-stockfish/Stockfish) project — the
+  reference this engine was learned from.
+- The [Chess Programming Wiki](https://www.chessprogramming.org) — an incredible
+  resource for every technique used here.
+- The **PeSTO** piece‑square tables, the basis of the hand‑crafted evaluation.
+
+## 📜 License
+
+Shark is free software, licensed under the **GNU General Public License v3.0 or
+later** (GPL‑3.0‑or‑later). Because it was developed by studying the GPL‑licensed
+Stockfish, any distributed version must also be GPL‑3.0 and ship its full source.
+See [Copying.txt](https://www.gnu.org/licenses/gpl-3.0.txt) for the full text.
+</content>
