@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="Mythos logo — a violet chess knight on an amethyst badge with a chessboard background" width="200">
+<img src="assets/logo.svg" alt="Mythos logo — a winged violet chess knight with golden wings on an amethyst badge with a chessboard background" width="200">
 
 <h1>Mythos 🐉</h1>
 
