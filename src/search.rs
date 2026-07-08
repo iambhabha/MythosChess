@@ -71,6 +71,15 @@ const DRAW_SCORE: i32 = -10;
 /// loss we are willing to dismiss without searching it.
 const SEE_PRUNE_MARGIN: i32 = 100;
 
+/// Bound on the butterfly history score. The gravity update keeps every entry in
+/// `[-HISTORY_MAX, HISTORY_MAX]`, so history stays comparable across a game and
+/// can never overflow the ordering bands.
+const HISTORY_MAX: i32 = 16384;
+
+/// Sentinel stored in [`Searcher::eval_stack`] at nodes where a static eval is
+/// meaningless (in check), so the "improving" test can skip them.
+const NONE_EVAL: i32 = i32::MIN;
+
 // ---------------------------------------------------------------------------
 // Public types.
 // ---------------------------------------------------------------------------
@@ -144,8 +153,14 @@ pub struct Searcher {
     tt: TranspositionTable,
     /// Two "killer" quiet moves per ply that recently caused a beta cutoff.
     killers: [[Move; 2]; MAX_PLY],
-    /// Butterfly history: how often a quiet `[from][to]` move caused a cutoff.
+    /// Butterfly history: a signed `[from][to]` score for quiet moves, raised on
+    /// a cutoff and lowered (malus) when a sibling cut off instead. Kept bounded
+    /// by a "gravity" update so it self-normalizes.
     history: [[i32; 64]; 64],
+    /// Static eval recorded per ply, so a node can tell whether its side's
+    /// position is *improving* versus two plies ago (a cheap trend signal that
+    /// tunes reductions and pruning).
+    eval_stack: [i32; MAX_PLY],
     /// Positions seen along the current root-to-leaf line, for repetition draws.
     repetitions: Vec<u64>,
     /// Nodes visited in the current search.
@@ -175,6 +190,7 @@ impl Searcher {
             tt: TranspositionTable::new(tt_size_mb),
             killers: [[Move::NONE; 2]; MAX_PLY],
             history: [[0; 64]; 64],
+            eval_stack: [0; MAX_PLY],
             repetitions: Vec::with_capacity(MAX_PLY),
             nodes: 0,
             deadline: None,
@@ -278,6 +294,7 @@ impl Searcher {
         self.tt.clear();
         self.killers = [[Move::NONE; 2]; MAX_PLY];
         self.history = [[0; 64]; 64];
+        self.eval_stack = [0; MAX_PLY];
         self.repetitions.clear();
     }
 
@@ -551,14 +568,28 @@ impl Searcher {
         // move-level pruning (LMP / futility) in the loop.
         let non_mate_window = beta.abs() < MATE_IN_MAX && alpha.abs() < MATE_IN_MAX;
         let prunable = !is_pv && !in_check && non_mate_window;
-        let static_eval = if prunable { self.static_eval(pos) } else { 0 };
+        // Static eval, used both for the forward-pruning heuristics below and for
+        // the "improving" trend. It is meaningless while in check, so we skip it
+        // there (and such nodes count as not improving).
+        let static_eval = if in_check { NONE_EVAL } else { self.static_eval(pos) };
+        self.eval_stack[ply] = static_eval;
+        // Are we better off than two plies ago (same side to move)? If so, a
+        // fail-low is less likely, so we can prune a touch harder / reduce a touch
+        // more; if not, we stay cautious.
+        let improving = !in_check
+            && ply >= 2
+            && self.eval_stack[ply - 2] != NONE_EVAL
+            && static_eval > self.eval_stack[ply - 2];
         if prunable {
             // (4b) Reverse futility pruning (a.k.a. static null move): if our
             // static eval is already so far above beta that even giving back
             // `margin` per remaining ply would still fail high, we assume this node
             // fails high and return early without searching a single move.
             const RFP_MARGIN: i32 = 90;
-            if depth <= 6 && static_eval - RFP_MARGIN * depth >= beta {
+            // When improving, shave one depth off the margin so we prune a little
+            // more readily; the trend says this node is unlikely to fail low.
+            let rfp_depth = depth - improving as i32;
+            if depth <= 6 && static_eval - RFP_MARGIN * rfp_depth >= beta {
                 return static_eval;
             }
 
@@ -617,6 +648,12 @@ impl Searcher {
         let mut best_score = -INFINITY;
         let mut best_move = Move::NONE;
         let mut child_pv: Vec<Move> = Vec::new();
+
+        // Quiet moves we actually searched, so that when a *later* quiet move
+        // causes a cutoff we can give these a history malus. A fixed stack buffer
+        // keeps this allocation-free in the hot loop.
+        let mut quiets_tried: [Move; 64] = [Move::NONE; 64];
+        let mut n_quiets = 0usize;
 
         // Push our key so children can detect a repetition back to this node.
         self.repetitions.push(key);
@@ -717,7 +754,14 @@ impl Searcher {
                 {
                     // A gentle log-based reduction, clamped so we never search
                     // below depth 1.
-                    let r = (0.75 + (depth as f64).ln() * (i as f64).ln() / 2.25) as i32;
+                    let mut r = (0.75 + (depth as f64).ln() * (i as f64).ln() / 2.25) as i32;
+                    // History-based: reduce less for quiet moves with a good track
+                    // record, more for ones with a bad one.
+                    r -= self.history[m.from_sq().index()][m.to_sq().index()] / 8192;
+                    // Reduce one extra ply when our position is not improving.
+                    if !improving {
+                        r += 1;
+                    }
                     r.clamp(1, depth - 2)
                 } else {
                     0
@@ -791,13 +835,25 @@ impl Searcher {
             }
 
             // Beta cutoff: this move is so good the opponent would never allow the
-            // position, so we can stop searching siblings (fail-high).
+            // position, so we can stop searching siblings (fail-high). Reward the
+            // move that cut off and penalize the earlier quiets that didn't.
             if alpha >= beta {
-                if is_quiet(pos, m) {
+                if quiet {
                     self.record_killer(m, ply);
-                    self.record_history(m, depth);
+                    let bonus = (depth * depth).min(HISTORY_MAX);
+                    self.update_history(m, bonus);
+                    for &qm in &quiets_tried[..n_quiets] {
+                        self.update_history(qm, -bonus);
+                    }
                 }
                 break;
+            }
+
+            // Searched a quiet move that did not cut off: remember it so a later
+            // cutoff can apply the history malus above.
+            if quiet && n_quiets < quiets_tried.len() {
+                quiets_tried[n_quiets] = m;
+                n_quiets += 1;
             }
         }
 
@@ -1009,12 +1065,16 @@ impl Searcher {
         }
     }
 
-    /// Reward a quiet move that caused a cutoff, weighted by remaining depth
-    /// (`depth * depth`), so moves that prune near the root count more.
-    fn record_history(&mut self, m: Move, depth: i32) {
+    /// Nudge a quiet move's history toward `bonus` (positive to reward, negative
+    /// for malus). The gravity term `h * |bonus| / HISTORY_MAX` pulls large scores
+    /// back toward zero, so entries self-normalize and stay in
+    /// `[-HISTORY_MAX, HISTORY_MAX]` without ever overflowing.
+    fn update_history(&mut self, m: Move, bonus: i32) {
         let from = m.from_sq().index();
         let to = m.to_sq().index();
-        self.history[from][to] += depth * depth;
+        let b = bonus.clamp(-HISTORY_MAX, HISTORY_MAX);
+        let h = &mut self.history[from][to];
+        *h += b - *h * b.abs() / HISTORY_MAX;
     }
 
     // -----------------------------------------------------------------------
