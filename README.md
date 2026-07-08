@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.png" alt="Mythos logo — a laurel-crowned marble bust of the Greek god Apollo over a glowing neon chessboard with pieces, beside the words MYTHOS CHESS ENGINE" width="640">
+<img src="assets/banner-cube.png" alt="Mythos banner — a marble bust of the Greek god Apollo inside a glowing neon wireframe cube, beside the words MYTHOS CHESS ENGINE" width="640">
 
 **A free and strong UCI chess engine written from scratch in Rust.**
 
