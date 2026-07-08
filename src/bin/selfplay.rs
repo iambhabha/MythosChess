@@ -54,6 +54,10 @@ struct Config {
     depth: Option<u32>,
     /// Hard cap on plies before a game is adjudicated a draw.
     maxplies: usize,
+    /// UCI options (`name=value`) sent to engine A after the handshake.
+    opts_a: Vec<(String, String)>,
+    /// UCI options (`name=value`) sent to engine B after the handshake.
+    opts_b: Vec<(String, String)>,
 }
 
 /// The built-in opening lines (UCI moves, space-separated). Each is played twice
@@ -88,6 +92,16 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
     let mut movetime = 100u64;
     let mut depth: Option<u32> = None;
     let mut maxplies = 300usize;
+    let mut opts_a: Vec<(String, String)> = Vec::new();
+    let mut opts_b: Vec<(String, String)> = Vec::new();
+
+    /// Split a `Name=Value` option argument (the value may contain `=`).
+    fn parse_opt(v: &str) -> Result<(String, String), String> {
+        match v.split_once('=') {
+            Some((n, val)) if !n.is_empty() => Ok((n.to_string(), val.to_string())),
+            _ => Err(format!("bad option (want Name=Value): {v}")),
+        }
+    }
 
     let mut i = 0;
     while i < args.len() {
@@ -113,6 +127,16 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
                 let v = args.get(i).ok_or("--maxplies needs a value")?;
                 maxplies = v.parse().map_err(|_| format!("bad --maxplies value: {v}"))?;
             }
+            "--opt-a" => {
+                i += 1;
+                let v = args.get(i).ok_or("--opt-a needs Name=Value")?;
+                opts_a.push(parse_opt(v)?);
+            }
+            "--opt-b" => {
+                i += 1;
+                let v = args.get(i).ok_or("--opt-b needs Name=Value")?;
+                opts_b.push(parse_opt(v)?);
+            }
             other => positional.push(other.to_string()),
         }
         i += 1;
@@ -120,7 +144,8 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
 
     if positional.len() < 2 {
         return Err("usage: selfplay <engine_a.exe> <engine_b.exe> \
-                    [--games N] [--movetime MS] [--depth D] [--maxplies P]"
+                    [--games N] [--movetime MS] [--depth D] [--maxplies P] \
+                    [--opt-a Name=Value ...] [--opt-b Name=Value ...]"
             .to_string());
     }
 
@@ -131,6 +156,8 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
         movetime,
         depth,
         maxplies,
+        opts_a,
+        opts_b,
     })
 }
 
@@ -236,6 +263,20 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// Send `setoption name N value V` for each pair, then re-sync with
+    /// `isready`/`readyok` so the options are applied before play starts.
+    fn set_options(&mut self, opts: &[(String, String)]) -> Result<(), String> {
+        if opts.is_empty() {
+            return Ok(());
+        }
+        for (n, v) in opts {
+            self.send(&format!("setoption name {n} value {v}"))?;
+        }
+        self.send("isready")?;
+        self.read_until(|l| l.trim() == "readyok")?;
+        Ok(())
     }
 
     /// Start a fresh game: `ucinewgame` then a fresh `isready`/`readyok` sync.
@@ -587,9 +628,13 @@ fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cfg = parse_args(&args)?;
 
-    // Spawn both engines (handshake happens inside spawn()).
+    // Spawn both engines (handshake happens inside spawn()), then apply any
+    // requested UCI options (e.g. UCI_LimitStrength/UCI_Elo on a reference
+    // engine for calibration matches).
     let mut engine_a = Engine::spawn(&cfg.engine_a)?;
     let mut engine_b = Engine::spawn(&cfg.engine_b)?;
+    engine_a.set_options(&cfg.opts_a)?;
+    engine_b.set_options(&cfg.opts_b)?;
     let name_a = engine_a.name.clone();
     let name_b = engine_b.name.clone();
 

@@ -4,12 +4,14 @@
 
 **A free and strong UCI chess engine written from scratch in Rust.**
 
+[![CI](https://github.com/iambhabha/MythosChess/actions/workflows/ci.yml/badge.svg)](https://github.com/iambhabha/MythosChess/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/iambhabha/MythosChess?color=blueviolet)](https://github.com/iambhabha/MythosChess/releases/latest)
 [![Language](https://img.shields.io/badge/language-Rust-CE422B?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Protocol](https://img.shields.io/badge/protocol-UCI-2E7D32)](https://backscattering.de/chess/uci/)
 [![License](https://img.shields.io/badge/license-GPL--3.0-1565C0)](#-license)
-[![Tests](https://img.shields.io/badge/tests-132%20passing-4CAF50)](#-build--run)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-607D8B)](#-build--run)
 
+[Download](https://github.com/iambhabha/MythosChess/releases/latest) ·
 [Play](#-play-against-mythos) ·
 [Features](#-features) ·
 [Build](#-build--run) ·
