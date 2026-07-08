@@ -131,7 +131,8 @@ has added a large, **measured** amount of strength:
 | Null‑move, LMR, aspiration windows, SEE | **+223 Elo** |
 | Full positional evaluation | **+58 Elo** |
 | Faster legal move generation | **+44 Elo** |
-| **Cumulative** | **≈ +320 Elo** over the first playable build |
+| History gravity + malus, improving heuristic, history‑LMR | **+58 Elo** |
+| **Cumulative** | **≈ +378 Elo** over the first playable build |
 
 In the same 3‑second search the current engine reaches **depth 17** where the
 first playable build reached depth 8.
@@ -148,11 +149,16 @@ capped to fixed Elo levels (single thread, 0.4 s/move, 14–20 games per level):
 | `UCI_Elo 2600` | 4 – 5 – 5 | **46.4 %** — roughly even |
 | **Full strength** (~3600) | 0 – 10 – 0 | **0 %** — the ceiling |
 
-Mythos is statistically **even with Stockfish limited to 2600 Elo**, placing its
-strength at **≈ 2575–2600 Elo** — enough to beat the vast majority of human
-players, and squarely in the class of the great *classical* (hand‑crafted)
+The table above was measured on the **v0.1.0** build (even with Stockfish at
+2600 Elo). A later search round added a further **+58 Elo** (self‑play), so the
+current build sits at roughly **≈ 2650 Elo** — enough to beat the vast majority of
+human players, and squarely in the class of the great *classical* (hand‑crafted)
 engines. Against a full‑strength modern engine it is, honestly, crushed 0–10 —
 that is the ~1000‑Elo gap that NNUE plus a decade of tuning buys.
+
+> The Stockfish‑at‑fixed‑Elo numbers are an **approximate** calibration (short
+> games, and Stockfish's strength‑limiting is itself noisy); the self‑play Elo
+> gains between Mythos versions are the precise, apples‑to‑apples measurements.
 
 ### 🌍 Where Mythos stands
 
@@ -171,7 +177,7 @@ NNUE top tier, the classic hand‑crafted engines, and where Mythos lands:
 | Arasan | NNUE | ~3670 |
 | Crafty 25 | hand‑crafted | ~3040 |
 | Fruit 2.1 | hand‑crafted | ~2690 |
-| **➡️ Mythos 0.1** | **hand‑crafted** | **~2600** *(self‑play calibration)* |
+| **➡️ Mythos 0.1.1** | **hand‑crafted** | **~2650** *(self‑play calibration)* |
 
 > These are approximate ratings from different lists (mostly CCRL Blitz / 40‑15)
 > and are **not** directly comparable to a self‑play calibration — treat the table

@@ -199,7 +199,7 @@ fn stop_search(stop: &Arc<AtomicBool>, handle: &mut Option<JoinHandle<()>>) {
 
 /// Print the `id` lines, the supported options, and the closing `uciok`.
 fn print_id() {
-    println!("id name Mythos 0.1.0");
+    println!("id name Mythos {}", env!("CARGO_PKG_VERSION"));
     println!("id author Mythos contributors");
     println!("option name Hash type spin default {DEFAULT_HASH_MB} min 1 max 4096");
     println!("option name Clear Hash type button");
