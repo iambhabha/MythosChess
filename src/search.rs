@@ -161,6 +161,13 @@ pub struct Searcher {
     /// position is *improving* versus two plies ago (a cheap trend signal that
     /// tunes reductions and pruning).
     eval_stack: [i32; MAX_PLY],
+    /// Tunable search parameters, exposed as UCI options so an external SPSA
+    /// tuner can adjust them without recompiling. Defaults reproduce the
+    /// hand-picked constants exactly.
+    p_rfp_margin: i32,  // reverse-futility margin per ply (default 90)
+    p_null_r_base: i32, // null-move reduction base (default 3)
+    p_lmr_div: i32,     // LMR log divisor ×100 (default 225 → 2.25)
+    p_fut_scale: i32,   // frontier-futility per-ply slack (default 100)
     /// Positions seen along the current root-to-leaf line, for repetition draws.
     repetitions: Vec<u64>,
     /// Nodes visited in the current search.
@@ -191,6 +198,10 @@ impl Searcher {
             killers: [[Move::NONE; 2]; MAX_PLY],
             history: [[0; 64]; 64],
             eval_stack: [0; MAX_PLY],
+            p_rfp_margin: 90,
+            p_null_r_base: 3,
+            p_lmr_div: 225,
+            p_fut_scale: 100,
             repetitions: Vec::with_capacity(MAX_PLY),
             nodes: 0,
             deadline: None,
@@ -296,6 +307,24 @@ impl Searcher {
         self.history = [[0; 64]; 64];
         self.eval_stack = [0; MAX_PLY];
         self.repetitions.clear();
+    }
+
+    /// Set a tunable search parameter by (case-insensitive) name. Returns `true`
+    /// if the name was recognized. Used by the UCI `setoption` handler so an
+    /// external SPSA tuner can adjust the search without recompiling.
+    pub fn set_param(&mut self, name: &str, value: i32) -> bool {
+        if name.eq_ignore_ascii_case("RfpMargin") {
+            self.p_rfp_margin = value.clamp(20, 300);
+        } else if name.eq_ignore_ascii_case("NullRBase") {
+            self.p_null_r_base = value.clamp(1, 6);
+        } else if name.eq_ignore_ascii_case("LmrDiv") {
+            self.p_lmr_div = value.clamp(100, 400);
+        } else if name.eq_ignore_ascii_case("FutScale") {
+            self.p_fut_scale = value.clamp(20, 300);
+        } else {
+            return false;
+        }
+        true
     }
 
     // -----------------------------------------------------------------------
@@ -585,11 +614,10 @@ impl Searcher {
             // static eval is already so far above beta that even giving back
             // `margin` per remaining ply would still fail high, we assume this node
             // fails high and return early without searching a single move.
-            const RFP_MARGIN: i32 = 90;
             // When improving, shave one depth off the margin so we prune a little
             // more readily; the trend says this node is unlikely to fail low.
             let rfp_depth = depth - improving as i32;
-            if depth <= 6 && static_eval - RFP_MARGIN * rfp_depth >= beta {
+            if depth <= 6 && static_eval - self.p_rfp_margin * rfp_depth >= beta {
                 return static_eval;
             }
 
@@ -600,7 +628,7 @@ impl Searcher {
             // to move (so we are not in zugzwang, where passing would help), and
             // that the parent did not itself pass (no two nulls in a row).
             if can_null && depth >= 3 && static_eval >= beta && self.has_non_pawn_material(pos) {
-                let r = 3 + depth / 3; // search reduction for the null search.
+                let r = self.p_null_r_base + depth / 3; // null-search reduction.
                 self.push_null_accumulator();
                 let undo = pos.make_null_move();
                 let mut child_pv: Vec<Move> = Vec::new();
@@ -732,7 +760,7 @@ impl Searcher {
                 // (6d) Frontier futility pruning: at very low depth, if the static
                 // eval plus a generous per-ply margin still cannot reach alpha,
                 // this quiet move is extremely unlikely to raise it, so skip it.
-                if depth <= 4 && static_eval + 100 + 100 * depth <= alpha {
+                if depth <= 4 && static_eval + 100 + self.p_fut_scale * depth <= alpha {
                     pos.undo_move(m, undo);
                     self.pop_accumulator();
                     continue;
@@ -770,7 +798,9 @@ impl Searcher {
                 {
                     // A gentle log-based reduction, clamped so we never search
                     // below depth 1.
-                    let mut r = (0.75 + (depth as f64).ln() * (i as f64).ln() / 2.25) as i32;
+                    let mut r = (0.75
+                        + (depth as f64).ln() * (i as f64).ln() / (self.p_lmr_div as f64 / 100.0))
+                        as i32;
                     // History-based: reduce less for quiet moves with a good track
                     // record, more for ones with a bad one.
                     r -= self.history[m.from_sq().index()][m.to_sq().index()] / 8192;

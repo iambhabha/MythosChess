@@ -205,6 +205,11 @@ fn print_id() {
     println!("option name Clear Hash type button");
     println!("option name UseNNUE type check default true");
     println!("option name EvalFile type string default <empty>");
+    // Tunable search parameters (for SPSA auto-tuning).
+    println!("option name RfpMargin type spin default 90 min 20 max 300");
+    println!("option name NullRBase type spin default 3 min 1 max 6");
+    println!("option name LmrDiv type spin default 225 min 100 max 400");
+    println!("option name FutScale type spin default 100 min 20 max 300");
     println!("uciok");
 }
 
@@ -270,6 +275,10 @@ fn handle_setoption(args: &str, searcher: &mut Arc<Mutex<Searcher>>) {
         } else {
             searcher.lock().unwrap().set_net(None);
         }
+    } else if let Some(v) = value.and_then(|s| s.parse::<i32>().ok()) {
+        // A tunable integer search parameter (for SPSA auto-tuning); an
+        // unrecognized name is ignored by set_param.
+        searcher.lock().unwrap().set_param(name, v);
     }
     // Unknown option: ignored.
 }
