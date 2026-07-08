@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="Mythos logo — a cosmic star-filled chess knight with golden wings and a laurel wreath over an amethyst chessboard, in a rounded square" width="230">
-
-<h1>Mythos</h1>
+<img src="assets/logo.png" alt="Mythos logo — a Greek statue bust inside a glowing neon wireframe cube, beside the words MYTHOS CHESS ENGINE" width="640">
 
 **A free and strong UCI chess engine written from scratch in Rust.**
 
