@@ -7,16 +7,17 @@ and trains a (768 -> 256)x2 -> 1 perspective network whose feature convention an
 on-disk format EXACTLY match the Rust inference in `src/nnue.rs`, so the exported
 `.nnue` file loads straight into the engine.
 
-Feature index (must match src/nnue.rs):
-    oriented_sq = sq            if perspective == White
-                = sq ^ 56       if perspective == Black
-    friendly    = (piece_color == perspective)
-    idx = (0 if friendly else 1) * 384 + piece_type_index * 64 + oriented_sq
+Feature index — king-bucketed "HalfKA" (must match src/nnue.rs):
+    oriented_sq   = sq       if White else sq ^ 56
+    oriented_king = king_sq  if White else king_sq ^ 56   (perspective's own king)
+    friendly      = (piece_color == perspective)
+    within        = (0 if friendly else 1) * 384 + piece_type_index * 64 + oriented_sq
+    idx           = oriented_king * 768 + within
     piece_type_index: P=0 N=1 B=2 R=3 Q=4 K=5
 
 .nnue file format (little-endian):
-    u32 magic = 0x4E4E5545 ("NNUE"), u32 hidden = 256, u32 num_features = 768,
-    w1 [256*768] f32 (row-major j*768+f), b1 [256] f32, w2 [512] f32, b2 f32
+    u32 magic = 0x4E4E5545 ("NNUE"), u32 hidden = 256, u32 num_features = 49152,
+    w1 [256*49152] f32 (row-major j*49152+f), b1 [256] f32, w2 [512] f32, b2 f32
 
 Usage:
     python train_nnue.py <data_file> <out.nnue> [--epochs 40] [--lr 1e-3]
@@ -35,7 +36,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 HIDDEN = 256
-NUM_FEATURES = 768
+KING_BUCKETS = 16           # coarse king zones (4×4 grid of 2×2 squares)
+FEATS_PER_BUCKET = 768      # 2 (friendly/enemy) × 6 (piece type) × 64 (square)
+NUM_FEATURES = KING_BUCKETS * FEATS_PER_BUCKET  # 12288 — king-bucketed "HalfKA"
 PAD = NUM_FEATURES          # padding feature index (contributes zero)
 MAX_FEATS = 32              # at most 32 pieces on the board
 SCALE = 400.0               # must match src/nnue.rs SCALE
@@ -63,12 +66,27 @@ def parse_fen(fen):
     return pieces, (stm == "w")
 
 
+def king_bucket(oriented_king):
+    """Map an oriented king square 0..64 to its coarse zone 0..KING_BUCKETS
+    (a 4×4 grid of 2×2 squares). Must match src/nnue.rs::king_bucket exactly."""
+    return (oriented_king // 8 // 2) * 4 + (oriented_king % 8 // 2)
+
+
 def feature_row(pieces, persp_white, out_row):
-    """Fill out_row (len MAX_FEATS, prefilled with PAD) with feature indices for a perspective."""
+    """Fill out_row (len MAX_FEATS, prefilled with PAD) with king-bucketed feature
+    indices for a perspective, matching src/nnue.rs::feature_index exactly."""
+    # The perspective's own king zone selects the 768-feature block ("HalfKA").
+    king_sq = 0
+    for (is_white, pt, sq) in pieces:
+        if pt == 5 and is_white == persp_white:
+            king_sq = sq
+            break
+    oriented_king = king_sq if persp_white else (king_sq ^ 56)
+    bucket = king_bucket(oriented_king) * FEATS_PER_BUCKET
     for i, (is_white, pt, sq) in enumerate(pieces):
         oriented = sq if persp_white else (sq ^ 56)
         friendly = (is_white == persp_white)
-        out_row[i] = (0 if friendly else 1) * 384 + pt * 64 + oriented
+        out_row[i] = bucket + (0 if friendly else 1) * 384 + pt * 64 + oriented
 
 
 def load_dataset(path, lam):

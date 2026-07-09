@@ -36,18 +36,43 @@ use crate::types::{Color, Move, MoveType, PieceType, Square};
 
 /// Hidden-layer width (per perspective). The combined layer is `2 * HIDDEN`.
 pub const HIDDEN: usize = 256;
-/// Number of input features: 2 (friendly/enemy) × 6 (piece type) × 64 (square).
-pub const NUM_FEATURES: usize = 768;
+/// King buckets: the perspective's own king square is mapped (via [`king_bucket`])
+/// into one of `KING_BUCKETS` coarse zones that select a feature block, so the
+/// piece features are *king-relative* — the "HalfKA" idea that gives a much
+/// stronger eval than plain piece-square features. Fewer, coarser buckets train
+/// better on limited data (each sees more positions) and keep the net small/fast.
+pub const KING_BUCKETS: usize = 16;
+/// Features within one king bucket: 2 (friendly/enemy) × 6 (piece type) × 64 (square).
+pub const FEATS_PER_BUCKET: usize = 768;
+/// Number of input features: one 768-block per king bucket (king-bucketed HalfKA).
+pub const NUM_FEATURES: usize = KING_BUCKETS * FEATS_PER_BUCKET; // 16 * 768 = 12288
 /// Output scale: the raw network output is multiplied by this to get centipawns,
 /// and the training target squashes `score_cp / SCALE` through a sigmoid.
 pub const SCALE: f32 = 400.0;
 
+/// Quantization scales for the **integer inference path** (post-training
+/// quantization of the trained f32 net — no retrain, the `.nnue` file stays f32).
+///
+/// The engine evaluates with integers so the per-move accumulator update runs as
+/// `i16` (16 lanes / AVX2 register vs 8 for `f32` — ~2× throughput on the hot path)
+/// and the layer-2 dot product as `i16`. `QA` scales the feature transformer:
+/// weights/biases and the accumulator are `round(w * QA)`, and the CReLU activation
+/// clamps to `[0, QA]` (float `[0, 1]`). `QB` scales the layer-2 weights. The dot
+/// product is an `i32` sum of `act * w2_q`, then descaled by `QA*QB` back to the
+/// float output that feeds `* SCALE`.
+///
+/// `QA = 127`: with this net's `max|w1| ≈ 2.63` the worst-case accumulator is
+/// `127 * 2.63 * 32 ≈ 10.7k`, comfortably inside `i16` (±32767). `QB = 64`: with
+/// `max|w2| ≈ 1.35`, `w2_q` peaks at ~86, well inside `i16`.
+pub const QA: i32 = 127;
+pub const QB: i32 = 64;
+
 /// File-format magic: the ASCII bytes "NNUE" as a little-endian `u32`.
 const MAGIC: u32 = 0x4E4E_5545;
 
-/// Half of the feature space: features 0..384 are "friendly" pieces, 384..768 are
-/// "enemy" pieces (from the chosen perspective).
-const HALF: usize = NUM_FEATURES / 2; // 384
+/// Half of a king bucket's 768-feature block: within a bucket, 0..384 are
+/// "friendly" pieces, 384..768 are "enemy" pieces (from the chosen perspective).
+const HALF: usize = FEATS_PER_BUCKET / 2; // 384
 
 // ---------------------------------------------------------------------------
 // Feature extraction — the single source of truth for the input convention.
@@ -70,6 +95,7 @@ const HALF: usize = NUM_FEATURES / 2; // 384
 /// from its own side: the mapping is symmetric between the two colors.
 pub fn active_features(pos: &Position, perspective: Color, out: &mut Vec<usize>) {
     out.clear();
+    let king_sq = pos.king_square(perspective);
     for i in 0..64 {
         // `from_index(0..64)` is always `Some`, but we match rather than unwrap.
         let sq = match crate::types::Square::from_index(i) {
@@ -77,33 +103,64 @@ pub fn active_features(pos: &Position, perspective: Color, out: &mut Vec<usize>)
             None => continue,
         };
         if let Some(piece) = pos.piece_at(sq) {
-            out.push(feature_index(perspective, piece.color, piece.piece_type, sq));
+            out.push(feature_index(
+                perspective,
+                king_sq,
+                piece.color,
+                piece.piece_type,
+                sq,
+            ));
         }
     }
 }
 
 /// The input-feature index of a piece of color `c` and type `pt` on square `sq`,
-/// seen from perspective color `perspective`. This is the *single source of truth*
-/// for the feature convention — both [`active_features`] (from-scratch) and the
-/// incremental [`Accumulator`] read their indices from here, so the two paths can
-/// never disagree about what a feature means.
+/// seen from perspective color `perspective` whose own king stands on `king_sq`.
+/// This is the *single source of truth* for the feature convention — both
+/// [`active_features`] (from-scratch) and the incremental [`Accumulator`] read
+/// their indices from here, so the two paths can never disagree.
 ///
-/// See the module docs / [`active_features`] for the derivation:
+/// King-bucketed ("HalfKA"): the perspective's king square maps to one of
+/// [`KING_BUCKETS`] zones ([`king_bucket`]) that selects a 768-feature block, and
+/// within it the piece is placed by the usual friendly/type/square scheme.
+/// Everything is vertically flipped for Black so each side views the board from
+/// its own back rank.
 ///
 /// ```text
-/// oriented_sq = if perspective == White { sq } else { sq ^ 56 }  // vflip for Black
-/// friendly    = (c == perspective)
-/// idx         = (if friendly { 0 } else { 1 }) * 384 + pt.index() * 64 + oriented_sq
+/// oriented_sq   = if perspective == White { sq }      else { sq ^ 56 }
+/// oriented_king = if perspective == White { king_sq } else { king_sq ^ 56 }
+/// friendly      = (c == perspective)
+/// within        = (if friendly { 0 } else { 1 }) * 384 + pt.index() * 64 + oriented_sq
+/// idx           = king_bucket(oriented_king) * 768 + within
 /// ```
 #[inline]
-pub fn feature_index(perspective: Color, c: Color, pt: PieceType, sq: Square) -> usize {
-    let oriented_sq = if perspective == Color::White {
-        sq.index()
+pub fn feature_index(
+    perspective: Color,
+    king_sq: Square,
+    c: Color,
+    pt: PieceType,
+    sq: Square,
+) -> usize {
+    let (oriented_sq, oriented_king) = if perspective == Color::White {
+        (sq.index(), king_sq.index())
     } else {
-        sq.index() ^ 56
+        (sq.index() ^ 56, king_sq.index() ^ 56)
     };
     let friendly = c == perspective;
-    (if friendly { 0 } else { 1 }) * HALF + pt.index() * 64 + oriented_sq
+    let within = (if friendly { 0 } else { 1 }) * HALF + pt.index() * 64 + oriented_sq;
+    king_bucket(oriented_king) * FEATS_PER_BUCKET + within
+}
+
+/// Map an (already perspective-oriented) king square 0..64 to its coarse bucket
+/// 0..[`KING_BUCKETS`]. The board is split into a 4×4 grid of 2×2 squares, so the
+/// king's rough zone (not its exact square) picks the feature block — 16 buckets
+/// that each still see plenty of training data. Both the trainer (`train_nnue.py`)
+/// and this engine must compute the bucket identically.
+#[inline]
+pub fn king_bucket(oriented_king_sq: usize) -> usize {
+    let rank = oriented_king_sq / 8;
+    let file = oriented_king_sq % 8;
+    (rank / 2) * 4 + (file / 2)
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +187,24 @@ pub struct Net {
     pub b1: Vec<f32>,
     pub w2: Vec<f32>,
     pub b2: f32,
+    // ---- Derived integer weights for the quantized inference path ----
+    // Built from the f32 weights above by [`Net::build_quant`], rebuilt whenever
+    // `w1`/`b1`/`w2` change. Not part of the on-disk format. The engine's
+    // accumulator + evaluation read *these*; the f32 weights are kept for the
+    // trainer and the float reference path ([`Net::evaluate_float`]).
+    /// Quantized transposed FT weights, `round(w1t * QA)`, layout `[NUM_FEATURES][HIDDEN]`.
+    w1t_q: Vec<i16>,
+    /// Quantized layer-1 biases, `round(b1 * QA)`, length `HIDDEN`.
+    b1_q: Vec<i16>,
+    /// Quantized layer-2 weights, `round(w2 * QB)`, length `2 * HIDDEN`.
+    w2_q: Vec<i16>,
+}
+
+/// Round `x` to the nearest `i16`, saturating at the `i16` bounds (a stray
+/// out-of-range weight clamps rather than wrapping into a wildly wrong value).
+#[inline]
+fn q_i16(x: f32) -> i16 {
+    x.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 
 /// Build the transposed feature-transformer weights from the row-major `w1`.
@@ -156,23 +231,39 @@ impl Net {
     pub fn zeros() -> Net {
         let w1 = vec![0.0; HIDDEN * NUM_FEATURES];
         let w1t = build_w1t(&w1);
-        Net {
+        let mut net = Net {
             w1,
             w1t,
             b1: vec![0.0; HIDDEN],
             w2: vec![0.0; 2 * HIDDEN],
             b2: 0.0,
-        }
+            w1t_q: Vec::new(),
+            b1_q: Vec::new(),
+            w2_q: Vec::new(),
+        };
+        net.build_quant();
+        net
     }
 
-    /// Rebuild the transposed FT weights (`w1t`) from the current `w1`.
+    /// Rebuild the transposed FT weights (`w1t`) and the quantized inference weights
+    /// from the current f32 `w1`/`b1`/`w2`.
     ///
-    /// `w1t` is a derived, in-memory-only copy that the accumulator update reads
-    /// (see [`build_w1t`]). It is set automatically by [`Net::zeros`] and
-    /// [`Net::from_bytes`]; call this after mutating `w1` directly (e.g. a trainer
-    /// updating weights) so the transposed copy stays consistent.
+    /// `w1t` and the `*_q` buffers are derived, in-memory-only copies that the
+    /// accumulator update and evaluation read. They are set automatically by
+    /// [`Net::zeros`] and [`Net::from_bytes`]; call this after mutating the f32
+    /// weights directly (e.g. a trainer updating them) so the derived copies stay
+    /// consistent.
     pub fn rebuild_w1t(&mut self) {
         self.w1t = build_w1t(&self.w1);
+        self.build_quant();
+    }
+
+    /// (Re)build the quantized integer weights (`w1t_q`, `b1_q`, `w2_q`) from the
+    /// current f32 weights. Assumes `w1t` is already up to date.
+    fn build_quant(&mut self) {
+        self.w1t_q = self.w1t.iter().map(|&x| q_i16(x * QA as f32)).collect();
+        self.b1_q = self.b1.iter().map(|&x| q_i16(x * QA as f32)).collect();
+        self.w2_q = self.w2.iter().map(|&x| q_i16(x * QB as f32)).collect();
     }
 
     /// Load a net from a file in the binary format written by [`Net::save`].
@@ -233,7 +324,18 @@ impl Net {
         // Derive the transposed FT weights in memory (see `build_w1t`). The disk
         // format only ever stores `w1`.
         let w1t = build_w1t(&w1);
-        Some(Net { w1, w1t, b1, w2, b2 })
+        let mut net = Net {
+            w1,
+            w1t,
+            b1,
+            w2,
+            b2,
+            w1t_q: Vec::new(),
+            b1_q: Vec::new(),
+            w2_q: Vec::new(),
+        };
+        net.build_quant();
+        Some(net)
     }
 
     /// Serialize this net to `path` in the binary format [`Net::from_bytes`] reads.
@@ -288,76 +390,93 @@ impl Net {
     /// Evaluate `pos`, returning a **side-to-move-relative** score in centipawns
     /// (positive = the side to move is better), clamped to about ±10000.
     ///
-    /// This recomputes both accumulators from scratch, so it is `O(pieces)` — fine
-    /// for a from-scratch static eval and for the trainer's forward pass. (A real
-    /// search would update the accumulators incrementally.)
+    /// This uses the same **quantized integer** path as the search's incremental
+    /// [`evaluate_acc`](Net::evaluate_acc): it rebuilds the accumulator from scratch
+    /// (`O(pieces)`) and applies the integer layer-2 output, so
+    /// `evaluate(pos) == evaluate_acc(refresh(net, pos), stm)` holds *exactly*.
+    /// For the pre-quantization float value, see [`evaluate_float`](Net::evaluate_float).
     pub fn evaluate(&self, pos: &Position) -> i32 {
-        let stm = pos.side_to_move();
-        let nstm = !stm;
-
-        let mut scratch: Vec<usize> = Vec::with_capacity(32);
-        let acc_stm = self.accumulate(pos, stm, &mut scratch);
-        let acc_nstm = self.accumulate(pos, nstm, &mut scratch);
-
-        // combined = concat(CReLU(acc_stm), CReLU(acc_nstm)); output = b2 + W2·combined.
-        // Route through the same `output` path (AVX2 or scalar) as `evaluate_acc`
-        // so `evaluate_acc(refresh(pos)) == evaluate(pos)` stays exact.
-        let acc_stm: &[f32; HIDDEN] = (&acc_stm[..]).try_into().expect("accumulate returns HIDDEN");
-        let acc_nstm: &[f32; HIDDEN] =
-            (&acc_nstm[..]).try_into().expect("accumulate returns HIDDEN");
-        let o = self.output(acc_stm, acc_nstm);
-
-        let cp = (o * SCALE).round();
-        cp.clamp(-10_000.0, 10_000.0) as i32
+        let acc = Accumulator::refresh(self, pos);
+        self.evaluate_acc(&acc, pos.side_to_move())
     }
 
     /// Evaluate from a **maintained** [`Accumulator`] instead of recomputing it
     /// from the board. This is the incremental fast path used inside the search:
     /// the accumulator is kept up to date across make/undo, so evaluation is just
-    /// the layer-2 output over the two already-summed hidden vectors.
+    /// the integer layer-2 output over the two already-summed hidden vectors.
     ///
-    /// `stm` is the side to move for the position the accumulator describes.
-    /// The result is **numerically identical** to [`Net::evaluate`] on the same
-    /// position, because both read the same `W1` columns (via the shared
-    /// [`feature_index`]) into the same `b1`-seeded sums and apply the same
-    /// CReLU / layer-2 arithmetic — only the *order of summation* into the
-    /// accumulator differs, and `refresh` reproduces `evaluate`'s order exactly.
+    /// `stm` is the side to move for the position the accumulator describes. The
+    /// result is **bit-identical** to [`Net::evaluate`] on the same position: both
+    /// read the same quantized `W1` columns into the same `b1_q`-seeded sums, and
+    /// integer addition is order-independent (unlike the old float path, which
+    /// matched only to ~1e-6).
     pub fn evaluate_acc(&self, acc: &Accumulator, stm: Color) -> i32 {
         // Pick the side-to-move accumulator first (W2's first half), then the
-        // not-side-to-move one, mirroring `evaluate`'s combined-vector layout.
+        // not-side-to-move one, mirroring the combined-vector layout.
         let (acc_stm, acc_nstm) = match stm {
             Color::White => (&acc.white, &acc.black),
             Color::Black => (&acc.black, &acc.white),
         };
 
-        let o = self.output(acc_stm, acc_nstm);
+        // Integer dot product `Σ clamp(acc,0,QA) * w2_q`, then descale by `QA*QB`
+        // back to the float output and multiply by SCALE for centipawns.
+        let raw = self.output_q(acc_stm, acc_nstm);
+        let o = self.b2 + raw as f32 / (QA * QB) as f32;
         let cp = (o * SCALE).round();
         cp.clamp(-10_000.0, 10_000.0) as i32
     }
 
-    /// The layer-2 output `b2 + Σ w2·CReLU(combined)` over the two `HIDDEN`-wide
-    /// perspective vectors (side-to-move half first). Runtime-dispatches to an AVX2
-    /// kernel when available, else the scalar reference; the two agree to float
-    /// precision (SIMD only reorders the summation).
+    /// The raw integer layer-2 dot product `Σ_j clamp(acc[j], 0, QA) * w2_q[j]`
+    /// over the combined `2*HIDDEN` vector (side-to-move half first). Returns the
+    /// undescaled `i32` sum. Runtime-dispatches to an AVX2 `i16`-madd kernel when
+    /// available, else the scalar reference (the two agree exactly — integer).
     #[inline]
-    fn output(&self, acc_stm: &[f32; HIDDEN], acc_nstm: &[f32; HIDDEN]) -> f32 {
+    fn output_q(&self, acc_stm: &[i16; HIDDEN], acc_nstm: &[i16; HIDDEN]) -> i32 {
         #[cfg(target_arch = "x86_64")]
         {
             if have_avx2() {
-                // SAFETY: guarded by a runtime AVX2 check. `w2` is `2*HIDDEN` long
+                // SAFETY: guarded by a runtime AVX2 check. `w2_q` is `2*HIDDEN` long
                 // and each accumulator half is exactly `HIDDEN`; the kernel reads
-                // them with unaligned 8-wide loads.
-                return unsafe { output_avx2(&self.w2, self.b2, acc_stm, acc_nstm) };
+                // them with unaligned 16-wide (i16) loads.
+                return unsafe { output_q_avx2(&self.w2_q, acc_stm, acc_nstm) };
             }
         }
-        self.output_scalar(acc_stm, acc_nstm)
+        self.output_q_scalar(acc_stm, acc_nstm)
     }
 
-    /// Scalar reference for [`Net::output`]: interleaves the stm/nstm halves exactly
-    /// as the original `evaluate`/`evaluate_acc` loops did, so it is bit-identical
-    /// to the pre-SIMD code.
+    /// Scalar reference for [`Net::output_q`].
     #[inline]
-    fn output_scalar(&self, acc_stm: &[f32; HIDDEN], acc_nstm: &[f32; HIDDEN]) -> f32 {
+    fn output_q_scalar(&self, acc_stm: &[i16; HIDDEN], acc_nstm: &[i16; HIDDEN]) -> i32 {
+        let mut sum: i32 = 0;
+        for j in 0..HIDDEN {
+            sum += crelu_q(acc_stm[j]) * self.w2_q[j] as i32;
+            sum += crelu_q(acc_nstm[j]) * self.w2_q[HIDDEN + j] as i32;
+        }
+        sum
+    }
+
+    /// The pre-quantization **float** evaluation, kept as a reference so tests can
+    /// bound the quantized eval's error. Rebuilds both accumulators from scratch in
+    /// `f32` and applies the float layer-2 output — this is what the net computed
+    /// before integer quantization.
+    pub fn evaluate_float(&self, pos: &Position) -> i32 {
+        let stm = pos.side_to_move();
+        let nstm = !stm;
+        let mut scratch: Vec<usize> = Vec::with_capacity(32);
+        let acc_stm = self.accumulate(pos, stm, &mut scratch);
+        let acc_nstm = self.accumulate(pos, nstm, &mut scratch);
+        let acc_stm: &[f32; HIDDEN] = (&acc_stm[..]).try_into().expect("accumulate returns HIDDEN");
+        let acc_nstm: &[f32; HIDDEN] =
+            (&acc_nstm[..]).try_into().expect("accumulate returns HIDDEN");
+        let o = self.output_float(acc_stm, acc_nstm);
+        let cp = (o * SCALE).round();
+        cp.clamp(-10_000.0, 10_000.0) as i32
+    }
+
+    /// Float layer-2 output `b2 + Σ w2·CReLU(combined)` — the reference for the
+    /// quantized [`output_q`](Net::output_q), used only by [`evaluate_float`].
+    #[inline]
+    fn output_float(&self, acc_stm: &[f32; HIDDEN], acc_nstm: &[f32; HIDDEN]) -> f32 {
         let mut o = self.b2;
         for j in 0..HIDDEN {
             o += self.w2[j] * crelu(acc_stm[j]);
@@ -381,8 +500,14 @@ impl Net {
 /// update per changed piece instead of an `O(pieces * HIDDEN)` rebuild.
 #[derive(Clone)]
 pub struct Accumulator {
-    pub white: [f32; HIDDEN],
-    pub black: [f32; HIDDEN],
+    pub white: [i16; HIDDEN],
+    pub black: [i16; HIDDEN],
+    /// The king squares this accumulator is bucketed on: `white_king` for the
+    /// `white` vector (White's own king), `black_king` for `black`. A move that
+    /// relocates a king changes that side's whole feature block, so it is detected
+    /// here and handled by a full [`refresh`](Accumulator::refresh).
+    white_king: Square,
+    black_king: Square,
 }
 
 impl Accumulator {
@@ -394,11 +519,13 @@ impl Accumulator {
     /// to `evaluate(pos)`.
     pub fn refresh(net: &Net, pos: &Position) -> Accumulator {
         let mut acc = Accumulator {
-            white: [0.0; HIDDEN],
-            black: [0.0; HIDDEN],
+            white: [0; HIDDEN],
+            black: [0; HIDDEN],
+            white_king: pos.king_square(Color::White),
+            black_king: pos.king_square(Color::Black),
         };
-        acc.white.copy_from_slice(&net.b1);
-        acc.black.copy_from_slice(&net.b1);
+        acc.white.copy_from_slice(&net.b1_q);
+        acc.black.copy_from_slice(&net.b1_q);
 
         for i in 0..64 {
             let sq = match Square::from_index(i) {
@@ -412,22 +539,15 @@ impl Accumulator {
         acc
     }
 
-    /// Whether two accumulators agree element-wise within a small float epsilon.
+    /// Whether two accumulators agree **exactly**, element for element.
     ///
-    /// An incrementally-maintained accumulator and a from-scratch [`refresh`] sum
-    /// the same `W1` columns but in a different order, so they match only to
-    /// IEEE-754 precision — a tiny (~1e-6) drift, never a structural difference.
-    /// A failure of this check means a genuine feature-mapping bug in
-    /// [`apply_move`](Accumulator::apply_move), not mere float rounding.
+    /// The accumulator is now integer (`i16`), and integer addition is
+    /// order-independent, so an incrementally-maintained accumulator and a
+    /// from-scratch [`refresh`] must be bit-identical (unlike the old float path,
+    /// which matched only to ~1e-6). Any mismatch is a genuine feature-mapping bug
+    /// in [`apply_move`](Accumulator::apply_move). The name is kept for callers.
     pub fn close_to(&self, other: &Accumulator) -> bool {
-        // Generous enough to absorb accumulated float rounding across a deep line,
-        // tight enough to catch any real (whole-weight-scale) mismatch.
-        const EPS: f32 = 1e-3;
-        self.white
-            .iter()
-            .zip(other.white.iter())
-            .chain(self.black.iter().zip(other.black.iter()))
-            .all(|(a, b)| (a - b).abs() <= EPS)
+        self.white == other.white && self.black == other.black
     }
 
     /// Add the `W1` columns of the piece `(color, pt)` on `sq` into **both**
@@ -435,20 +555,20 @@ impl Accumulator {
     /// Black vector the Black-perspective one).
     #[inline]
     fn add_piece(&mut self, net: &Net, color: Color, pt: PieceType, sq: Square) {
-        let wf = feature_index(Color::White, color, pt, sq);
-        let bf = feature_index(Color::Black, color, pt, sq);
-        add_column(&mut self.white, &net.w1t, wf);
-        add_column(&mut self.black, &net.w1t, bf);
+        let wf = feature_index(Color::White, self.white_king, color, pt, sq);
+        let bf = feature_index(Color::Black, self.black_king, color, pt, sq);
+        add_column(&mut self.white, &net.w1t_q, wf);
+        add_column(&mut self.black, &net.w1t_q, bf);
     }
 
     /// Subtract the `W1` columns of the piece `(color, pt)` on `sq` from **both**
     /// perspective vectors — the exact inverse of [`add_piece`](Accumulator::add_piece).
     #[inline]
     fn remove_piece(&mut self, net: &Net, color: Color, pt: PieceType, sq: Square) {
-        let wf = feature_index(Color::White, color, pt, sq);
-        let bf = feature_index(Color::Black, color, pt, sq);
-        sub_column(&mut self.white, &net.w1t, wf);
-        sub_column(&mut self.black, &net.w1t, bf);
+        let wf = feature_index(Color::White, self.white_king, color, pt, sq);
+        let bf = feature_index(Color::Black, self.black_king, color, pt, sq);
+        sub_column(&mut self.white, &net.w1t_q, wf);
+        sub_column(&mut self.black, &net.w1t_q, bf);
     }
 
     /// Produce the accumulator for the position *after* `m` is played, given the
@@ -483,6 +603,16 @@ impl Accumulator {
         let moving = pos_before
             .piece_at(from)
             .expect("apply_move from an empty square");
+
+        // A king move (including castling) changes that side's king bucket, so every
+        // feature in that perspective is re-indexed — a piece-by-piece diff no longer
+        // applies. Kings move infrequently enough that rebuilding both accumulators
+        // from the post-move board is cheap and keeps the code simple and correct.
+        if moving.piece_type == PieceType::King {
+            let mut after = pos_before.clone();
+            after.make_move(m);
+            return Accumulator::refresh(net, &after);
+        }
 
         match m.move_type() {
             MoveType::Normal => {
@@ -546,13 +676,13 @@ impl Accumulator {
 /// (unlike the strided column of the row-major `w1`). Runtime-dispatches to an AVX2
 /// kernel when available, else the scalar loop — the two agree to float precision.
 #[inline]
-fn add_column(acc: &mut [f32; HIDDEN], w1t: &[f32], f: usize) {
+fn add_column(acc: &mut [i16; HIDDEN], w1t: &[i16], f: usize) {
     let col = &w1t[f * HIDDEN..f * HIDDEN + HIDDEN];
     #[cfg(target_arch = "x86_64")]
     {
         if have_avx2() {
             // SAFETY: guarded by a runtime AVX2 check; `col` and `acc` are both
-            // exactly `HIDDEN` f32s, and the kernel uses unaligned loads/stores.
+            // exactly `HIDDEN` i16s, and the kernel uses unaligned loads/stores.
             unsafe {
                 add_column_avx2(acc, col);
             }
@@ -565,7 +695,7 @@ fn add_column(acc: &mut [f32; HIDDEN], w1t: &[f32], f: usize) {
 /// Subtract the transposed FT column of feature `f` from `acc` (`acc[j] -= w1t[j]`).
 /// The exact inverse of [`add_column`]; same AVX2/scalar dispatch.
 #[inline]
-fn sub_column(acc: &mut [f32; HIDDEN], w1t: &[f32], f: usize) {
+fn sub_column(acc: &mut [i16; HIDDEN], w1t: &[i16], f: usize) {
     let col = &w1t[f * HIDDEN..f * HIDDEN + HIDDEN];
     #[cfg(target_arch = "x86_64")]
     {
@@ -580,17 +710,17 @@ fn sub_column(acc: &mut [f32; HIDDEN], w1t: &[f32], f: usize) {
     sub_column_scalar(acc, col);
 }
 
-/// Scalar `acc[j] += col[j]` over the `HIDDEN`-wide contiguous column.
+/// Scalar `acc[j] += col[j]` over the `HIDDEN`-wide contiguous i16 column.
 #[inline]
-fn add_column_scalar(acc: &mut [f32; HIDDEN], col: &[f32]) {
+fn add_column_scalar(acc: &mut [i16; HIDDEN], col: &[i16]) {
     for (a, &c) in acc.iter_mut().zip(col.iter()) {
         *a += c;
     }
 }
 
-/// Scalar `acc[j] -= col[j]` over the `HIDDEN`-wide contiguous column.
+/// Scalar `acc[j] -= col[j]` over the `HIDDEN`-wide contiguous i16 column.
 #[inline]
-fn sub_column_scalar(acc: &mut [f32; HIDDEN], col: &[f32]) {
+fn sub_column_scalar(acc: &mut [i16; HIDDEN], col: &[i16]) {
     for (a, &c) in acc.iter_mut().zip(col.iter()) {
         *a -= c;
     }
@@ -625,7 +755,15 @@ pub fn load_default() -> Option<Net> {
     None
 }
 
-/// Clamped ReLU: the activation used between the two layers.
+/// Quantized clamped ReLU: clamp an `i16` accumulator value to `[0, QA]` and widen
+/// to `i32` for the layer-2 dot product. The float `[0, 1]` activation range maps to
+/// the integer `[0, QA]` range.
+#[inline]
+pub fn crelu_q(x: i16) -> i32 {
+    (x as i32).clamp(0, QA)
+}
+
+/// Clamped ReLU: the activation used between the two layers (float reference path).
 #[inline]
 pub fn crelu(x: f32) -> f32 {
     x.clamp(0.0, 1.0)
@@ -657,125 +795,125 @@ fn have_avx2() -> bool {
         .get_or_init(|| std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma"))
 }
 
-/// AVX2 `acc[j] += col[j]` over `HIDDEN` (=256) f32 = 32 vector adds.
+/// AVX2 `acc[j] += col[j]` over `HIDDEN` (=256) i16 = 16 vector adds (16 lanes each).
 ///
 /// # Safety
 /// The caller must have verified AVX2 support (via [`have_avx2`]). `acc` is exactly
-/// `HIDDEN` f32; `col` must be at least `HIDDEN` f32 (it is a `HIDDEN`-wide column
+/// `HIDDEN` i16; `col` must be at least `HIDDEN` i16 (it is a `HIDDEN`-wide column
 /// slice). Uses unaligned loads/stores, so no alignment requirement.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-fn add_column_avx2(acc: &mut [f32; HIDDEN], col: &[f32]) {
+fn add_column_avx2(acc: &mut [i16; HIDDEN], col: &[i16]) {
     use std::arch::x86_64::*;
     debug_assert!(col.len() >= HIDDEN);
     let a = acc.as_mut_ptr();
     let c = col.as_ptr();
     let mut j = 0;
     while j < HIDDEN {
-        // SAFETY: `j` steps by 8 and stops before `HIDDEN`, so every `.add(j)`
-        // plus an 8-wide load/store stays within the `HIDDEN`-long `acc`/`col`.
+        // SAFETY: `j` steps by 16 and stops before `HIDDEN`, so every `.add(j)` plus
+        // a 16-wide (256-bit) load/store stays within the `HIDDEN`-long `acc`/`col`.
         unsafe {
-            let va = _mm256_loadu_ps(a.add(j));
-            let vc = _mm256_loadu_ps(c.add(j));
-            _mm256_storeu_ps(a.add(j), _mm256_add_ps(va, vc));
+            let va = _mm256_loadu_si256(a.add(j) as *const __m256i);
+            let vc = _mm256_loadu_si256(c.add(j) as *const __m256i);
+            _mm256_storeu_si256(a.add(j) as *mut __m256i, _mm256_add_epi16(va, vc));
         }
-        j += 8;
+        j += 16;
     }
 }
 
-/// AVX2 `acc[j] -= col[j]` over `HIDDEN` (=256) f32 = 32 vector subs.
+/// AVX2 `acc[j] -= col[j]` over `HIDDEN` (=256) i16 = 16 vector subs.
 ///
 /// # Safety
 /// Same contract as [`add_column_avx2`].
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-fn sub_column_avx2(acc: &mut [f32; HIDDEN], col: &[f32]) {
+fn sub_column_avx2(acc: &mut [i16; HIDDEN], col: &[i16]) {
     use std::arch::x86_64::*;
     debug_assert!(col.len() >= HIDDEN);
     let a = acc.as_mut_ptr();
     let c = col.as_ptr();
     let mut j = 0;
     while j < HIDDEN {
-        // SAFETY: as in `add_column_avx2` — bounded 8-wide loads/stores.
+        // SAFETY: as in `add_column_avx2` — bounded 16-wide loads/stores.
         unsafe {
-            let va = _mm256_loadu_ps(a.add(j));
-            let vc = _mm256_loadu_ps(c.add(j));
-            _mm256_storeu_ps(a.add(j), _mm256_sub_ps(va, vc));
+            let va = _mm256_loadu_si256(a.add(j) as *const __m256i);
+            let vc = _mm256_loadu_si256(c.add(j) as *const __m256i);
+            _mm256_storeu_si256(a.add(j) as *mut __m256i, _mm256_sub_epi16(va, vc));
         }
-        j += 8;
+        j += 16;
     }
 }
 
-/// AVX2+FMA layer-2 output: `b2 + Σ w2·CReLU(combined)` over the two `HIDDEN` halves.
+/// AVX2 quantized layer-2 output: the raw `i32` dot product
+/// `Σ clamp(acc, 0, QA) * w2_q` over the two `HIDDEN` halves.
 ///
-/// CReLU is `_mm256_max_ps(x, 0)` then `_mm256_min_ps(x, 1)`; the multiply-add into
-/// an accumulator vector uses `_mm256_fmadd_ps`. The stm half (dotted with
-/// `w2[0..HIDDEN]`) and the nstm half (dotted with `w2[HIDDEN..2*HIDDEN]`) are
-/// accumulated into the same lane-vector, then horizontally summed once at the end
-/// and added to `b2` — matching the scalar `output_scalar` to float precision.
+/// CReLU is `_mm256_max_epi16(x, 0)` then `_mm256_min_epi16(x, QA)` (still `i16`);
+/// the multiply-accumulate uses `_mm256_madd_epi16` (`i16 × i16 → i32`, adjacent
+/// pairs summed) — no `u8` packing, so no lane-permutation bookkeeping. The stm
+/// half (dotted with `w2_q[0..HIDDEN]`) and the nstm half (`w2_q[HIDDEN..]`) are
+/// accumulated into the same `i32` lane-vector, then horizontally summed once at the
+/// end — exactly matching the scalar `output_q_scalar`.
 ///
 /// # Safety
-/// The caller must have verified AVX2+FMA support (via [`have_avx2`]). `w2` must be
-/// at least `2 * HIDDEN` f32; each accumulator half is exactly `HIDDEN`. Uses
+/// The caller must have verified AVX2 support (via [`have_avx2`]). `w2_q` must be at
+/// least `2 * HIDDEN` i16; each accumulator half is exactly `HIDDEN` i16. Uses
 /// unaligned loads.
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2,fma")]
-fn output_avx2(w2: &[f32], b2: f32, acc_stm: &[f32; HIDDEN], acc_nstm: &[f32; HIDDEN]) -> f32 {
+#[target_feature(enable = "avx2")]
+fn output_q_avx2(w2_q: &[i16], acc_stm: &[i16; HIDDEN], acc_nstm: &[i16; HIDDEN]) -> i32 {
     use std::arch::x86_64::*;
-    debug_assert!(w2.len() >= 2 * HIDDEN);
+    debug_assert!(w2_q.len() >= 2 * HIDDEN);
 
-    let w2p = w2.as_ptr();
+    let w2p = w2_q.as_ptr();
     let stm = acc_stm.as_ptr();
     let nstm = acc_nstm.as_ptr();
 
-    // SAFETY: `j` steps by 8 and stops before `HIDDEN`; the stm/nstm loads read
-    // within the `HIDDEN`-long accumulators, and the `w2` loads read within its
+    // SAFETY: `j` steps by 16 and stops before `HIDDEN`; the stm/nstm loads read
+    // within the `HIDDEN`-long accumulators, and the `w2_q` loads read within its
     // `2*HIDDEN`-long buffer (`j` for the first half, `HIDDEN + j` for the second).
     let sum = unsafe {
-        let zero = _mm256_setzero_ps();
-        let one = _mm256_set1_ps(1.0);
-        let mut sum = _mm256_setzero_ps();
+        let zero = _mm256_setzero_si256();
+        let qa = _mm256_set1_epi16(QA as i16);
+        let mut sum = _mm256_setzero_si256();
         let mut j = 0;
         while j < HIDDEN {
-            // stm half: CReLU(acc_stm[j..]) * w2[j..].
-            let xs = _mm256_loadu_ps(stm.add(j));
-            let cs = _mm256_min_ps(_mm256_max_ps(xs, zero), one);
-            let ws = _mm256_loadu_ps(w2p.add(j));
-            sum = _mm256_fmadd_ps(cs, ws, sum);
+            // stm half: clamp(acc_stm[j..], 0, QA) madd w2_q[j..].
+            let xs = _mm256_loadu_si256(stm.add(j) as *const __m256i);
+            let cs = _mm256_min_epi16(_mm256_max_epi16(xs, zero), qa);
+            let ws = _mm256_loadu_si256(w2p.add(j) as *const __m256i);
+            sum = _mm256_add_epi32(sum, _mm256_madd_epi16(cs, ws));
 
-            // nstm half: CReLU(acc_nstm[j..]) * w2[HIDDEN + j..].
-            let xn = _mm256_loadu_ps(nstm.add(j));
-            let cn = _mm256_min_ps(_mm256_max_ps(xn, zero), one);
-            let wn = _mm256_loadu_ps(w2p.add(HIDDEN + j));
-            sum = _mm256_fmadd_ps(cn, wn, sum);
+            // nstm half: clamp(acc_nstm[j..], 0, QA) madd w2_q[HIDDEN + j..].
+            let xn = _mm256_loadu_si256(nstm.add(j) as *const __m256i);
+            let cn = _mm256_min_epi16(_mm256_max_epi16(xn, zero), qa);
+            let wn = _mm256_loadu_si256(w2p.add(HIDDEN + j) as *const __m256i);
+            sum = _mm256_add_epi32(sum, _mm256_madd_epi16(cn, wn));
 
-            j += 8;
+            j += 16;
         }
         sum
     };
 
-    b2 + hsum256_ps(sum)
+    hsum256_epi32(sum)
 }
 
-/// Horizontal sum of the 8 lanes of a `__m256`.
+/// Horizontal sum of the 8 `i32` lanes of a `__m256i`.
 ///
 /// # Safety
-/// Caller must have AVX (implied by AVX2). Pure lane arithmetic, no memory access.
+/// Caller must have AVX2. Pure lane arithmetic, no memory access.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-fn hsum256_ps(v: std::arch::x86_64::__m256) -> f32 {
+fn hsum256_epi32(v: std::arch::x86_64::__m256i) -> i32 {
     use std::arch::x86_64::*;
-    // Pure register/lane arithmetic (no memory access): safe inside this
-    // `avx2`-enabled fn, so no `unsafe` block is needed.
-    // Fold the high 128 into the low 128, then reduce the 4 lanes.
-    let lo = _mm256_castps256_ps128(v);
-    let hi = _mm256_extractf128_ps(v, 1);
-    let mut s = _mm_add_ps(lo, hi); // [a0+a4, a1+a5, a2+a6, a3+a7]
-    let shuf = _mm_movehdup_ps(s); // [s1, s1, s3, s3]
-    s = _mm_add_ps(s, shuf); // [s0+s1, _, s2+s3, _]
-    let hi64 = _mm_movehl_ps(shuf, s); // move s2+s3 into lane 0
-    s = _mm_add_ss(s, hi64);
-    _mm_cvtss_f32(s)
+    // Fold the high 128 into the low 128, then reduce the 4 i32 lanes.
+    let lo = _mm256_castsi256_si128(v);
+    let hi = _mm256_extracti128_si256(v, 1);
+    let s = _mm_add_epi32(lo, hi); // 4 lanes
+    let shuf = _mm_shuffle_epi32(s, 0b_10_11_00_01); // swap within pairs
+    let s = _mm_add_epi32(s, shuf); // [l0+l1, ., l2+l3, .]
+    let hi64 = _mm_unpackhi_epi64(s, s); // move l2+l3 into lane 0
+    let s = _mm_add_epi32(s, hi64);
+    _mm_cvtsi128_si32(s)
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,10 +1173,12 @@ mod tests {
     #[test]
     fn incremental_promotion_quiet_and_capture() {
         let net = pseudo_random_net();
-        // A quiet promotion to a queen.
+        // A quiet promotion to a queen. (The enemy king sits off the promotion
+        // square — a king-bucketed net requires both kings present, and no legal
+        // position lets a pawn promote onto the enemy king anyway.)
         assert_incremental_matches(
             &net,
-            "k7/P7/8/8/8/8/8/K7 w - - 0 1",
+            "8/P6k/8/8/8/8/8/K7 w - - 0 1",
             &[Move::promotion(Square::A7, Square::A8, PieceType::Queen)],
         );
         // A capturing promotion: b7 takes the rook on a8, promoting to a knight.
@@ -1065,5 +1205,62 @@ mod tests {
                 Move::normal(Square::F3, Square::E2),   // queen recaptures bishop
             ],
         );
+    }
+
+    // -- Quantization ------------------------------------------------------
+
+    /// FENs covering opening, middlegame, and endgame material.
+    const EVAL_FENS: [&str; 4] = [
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 b - - 0 1",
+        "8/P6k/8/8/8/8/8/K7 w - - 0 1",
+    ];
+
+    /// The AVX2 integer output kernel must be **bit-identical** to the scalar
+    /// reference (both are integer, so there is no rounding slack — a mismatch is a
+    /// real SIMD bug, e.g. a wrong clamp or a lane-permutation error).
+    #[test]
+    fn output_q_simd_matches_scalar() {
+        let net = pseudo_random_net();
+        for fen in EVAL_FENS {
+            let pos = Position::from_fen(fen).unwrap();
+            let acc = Accumulator::refresh(&net, &pos);
+            let (stm, nstm) = match pos.side_to_move() {
+                Color::White => (&acc.white, &acc.black),
+                Color::Black => (&acc.black, &acc.white),
+            };
+            let scalar = net.output_q_scalar(stm, nstm);
+            #[cfg(target_arch = "x86_64")]
+            if have_avx2() {
+                // SAFETY: guarded by the runtime AVX2 check; `w2_q` is `2*HIDDEN`
+                // and each half is exactly `HIDDEN` i16.
+                let simd = unsafe { output_q_avx2(&net.w2_q, stm, nstm) };
+                assert_eq!(simd, scalar, "SIMD output_q disagrees with scalar for {fen}");
+            }
+        }
+    }
+
+    /// The quantized integer eval must track the pre-quantization float eval. This
+    /// bounds the post-training-quantization error and would catch a structural bug
+    /// (wrong scale, missing descale, sign flip — those blow up by >>1 pawn). The
+    /// bound is generous because `pseudo_random_net` has large weights that push
+    /// activations near the CReLU clamp, amplifying rounding well past what a real
+    /// trained net (small weights) exhibits.
+    #[test]
+    fn quantized_eval_tracks_float() {
+        let net = pseudo_random_net();
+        for fen in EVAL_FENS {
+            let pos = Position::from_fen(fen).unwrap();
+            let q = net.evaluate(&pos);
+            let f = net.evaluate_float(&pos);
+            assert!(
+                (q - f).abs() <= 150,
+                "quantized eval {q} strays too far from float {f} for {fen}"
+            );
+            if f.abs() >= 400 {
+                assert_eq!(q.signum(), f.signum(), "quantized eval flipped sign for {fen}");
+            }
+        }
     }
 }
