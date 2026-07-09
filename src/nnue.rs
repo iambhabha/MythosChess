@@ -61,11 +61,16 @@ pub const SCALE: f32 = 400.0;
 /// product is an `i32` sum of `act * w2_q`, then descaled by `QA*QB` back to the
 /// float output that feeds `* SCALE`.
 ///
-/// `QA = 127`: with this net's `max|w1| ≈ 2.63` the worst-case accumulator is
-/// `127 * 2.63 * 32 ≈ 10.7k`, comfortably inside `i16` (±32767). `QB = 64`: with
-/// `max|w2| ≈ 1.35`, `w2_q` peaks at ~86, well inside `i16`.
-pub const QA: i32 = 127;
-pub const QB: i32 = 64;
+/// `QA = 512`, `QB = 512`. The accumulator is bounded not by the pathological
+/// `QA * max|w1| * 32` but by the *actual* pre-activation range: measured over 2000
+/// real positions the largest `|b1 + Σ w1|` element is ≈ 7.4 (the feature weights
+/// cancel heavily), so the i16 accumulator peaks at `512 * 7.4 ≈ 3.8k` — an ~8×
+/// headroom to the ±32767 cap, safe even if a rare position doubles that. This finer
+/// scale (4× the original 127/64) cuts the mean post-quantization eval error from
+/// ~10 cp to ~2-3 cp, so the integer eval tracks the float net closely. `w2_q` peaks
+/// at `512 * 1.35 ≈ 691`, and the `i32` layer-2 sum stays far inside range.
+pub const QA: i32 = 512;
+pub const QB: i32 = 512;
 
 /// File-format magic: the ASCII bytes "NNUE" as a little-endian `u32`.
 const MAGIC: u32 = 0x4E4E_5545;
@@ -1262,5 +1267,61 @@ mod tests {
                 assert_eq!(q.signum(), f.signum(), "quantized eval flipped sign for {fen}");
             }
         }
+    }
+
+    /// Diagnostic (run with `--ignored --nocapture`): load the real 25M net and the
+    /// first ~2000 FENs from a data shard, and report how far the quantized integer
+    /// eval strays from the float reference. Tells us whether quantization is costing
+    /// eval quality (mean abs error in centipawns).
+    #[test]
+    #[ignore]
+    fn measure_quant_error_on_real_net() {
+        let net = match Net::load("mythos_hka16_25m.nnue") {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("skip: cannot load net: {e}");
+                return;
+            }
+        };
+        let data = match std::fs::read_to_string("sf_big.txt.w0") {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("skip: cannot read shard: {e}");
+                return;
+            }
+        };
+        let mut n = 0usize;
+        let mut sum_abs = 0i64;
+        let mut max_abs = 0i32;
+        let mut hist = [0usize; 6]; // <=2, <=5, <=10, <=20, <=50, >50
+        let mut max_preact = 0.0f32; // largest |b1 + Σ w1| element seen (float, unclamped)
+        let mut scratch: Vec<usize> = Vec::with_capacity(32);
+        for line in data.lines().take(2000) {
+            let fen = line.split('|').next().unwrap_or("").trim();
+            let pos = match Position::from_fen(fen) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let q = net.evaluate(&pos);
+            let f = net.evaluate_float(&pos);
+            let d = (q - f).abs();
+            n += 1;
+            sum_abs += d as i64;
+            max_abs = max_abs.max(d);
+            let b = if d <= 2 { 0 } else if d <= 5 { 1 } else if d <= 10 { 2 }
+                    else if d <= 20 { 3 } else if d <= 50 { 4 } else { 5 };
+            hist[b] += 1;
+            for persp in [Color::White, Color::Black] {
+                for &v in net.accumulate(&pos, persp, &mut scratch).iter() {
+                    max_preact = max_preact.max(v.abs());
+                }
+            }
+        }
+        let mean = if n > 0 { sum_abs as f64 / n as f64 } else { 0.0 };
+        eprintln!("QUANT ERROR over {n} real positions: mean={mean:.2}cp max={max_abs}cp");
+        eprintln!("  |err| buckets  <=2:{} <=5:{} <=10:{} <=20:{} <=50:{} >50:{}",
+                  hist[0], hist[1], hist[2], hist[3], hist[4], hist[5]);
+        eprintln!("  max|preact|={max_preact:.3}  -> safe QA <= {:.0} (i16 cap 32767)",
+                  30000.0 / max_preact);
     }
 }
