@@ -1,0 +1,22 @@
+[package]
+name = "trainer-burn"
+version = "0.1.0"
+edition = "2024"
+description = "All-Rust NNUE trainer for Mythos, built on the Burn deep-learning framework (GPU via wgpu)."
+
+# Standalone workspace so this heavy (burn/wgpu) crate never gets pulled into the
+# engine's own dependency-free build. It reuses the engine via a path dependency.
+[workspace]
+
+[dependencies]
+# Reuse the engine's own feature convention and .nnue writer so the trained net can
+# never disagree with what the engine expects.
+mythos = { path = ".." }
+# Burn with the wgpu backend: runs on the RTX 5080 via Vulkan/DX12 without needing
+# the CUDA toolkit (nvcc), which is not installed.
+burn = { version = "0.21", features = ["wgpu", "autodiff", "train"] }
+# Deterministic shuffling of the training set (seeded, so runs are reproducible).
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
